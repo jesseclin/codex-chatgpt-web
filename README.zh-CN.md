@@ -160,6 +160,13 @@ shell 命令来委派独立的子任务（例如对单个文件进行范围受�
 ./scripts/install-launcher-local.sh
 ```
 
+在 Windows 上，可以直接在普通的 PowerShell 终端中操作（无需 WSL 或 git-bash）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install-launcher-local.ps1
+```
+
 如果没有需要测试的本地修改，可以跳过这一步，直接使用官方发行版；下面的内容在两种情况下都适用。
 
 **快速开始（与启动器应用一起使用 `--hitl`）：**

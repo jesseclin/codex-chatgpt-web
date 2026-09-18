@@ -164,6 +164,13 @@ Windows에서는 런처가 이를 대신 처리할 수 있습니다. **설정 �
 ./scripts/install-launcher-local.sh
 ```
 
+Windows에서는 일반 PowerShell 터미널에서 (WSL/git-bash 불필요):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install-launcher-local.ps1
+```
+
 테스트할 로컬 변경 사항이 없다면 이 단계를 건너뛰고 공식 릴리스를 사용하세요. 아래 내용은 두
 경우 모두에 적용됩니다.
 

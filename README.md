@@ -192,6 +192,13 @@ changes:
 ./scripts/install-launcher-local.sh
 ```
 
+On Windows, from a plain PowerShell terminal (no WSL/git-bash needed):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install-launcher-local.ps1
+```
+
 Skip this and use an official release if you don't have local changes to test; everything below
 applies either way.
 
