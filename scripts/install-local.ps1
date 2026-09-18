@@ -100,7 +100,10 @@ try {
     & $ShimPath setup @SetupArgs
     exit 0
   }
-  Write-Host "Next: codex-chatgpt-web setup --browser-only --acknowledge-unofficial"
+  # Terminal-only "setup --browser-only" requires macOS (src/setup.ts); on Windows the launcher
+  # drives setup itself (it supplies --browser-host-descriptor), so point there instead.
+  Write-Host "Next: install/run the Codex Web GPT launcher (./scripts/install-launcher-local.ps1),"
+  Write-Host "then use its Settings -> Local exec (HITL) to finish setup and run 'serve --hitl'."
 } finally {
   Pop-Location
 }
