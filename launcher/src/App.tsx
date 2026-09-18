@@ -28,6 +28,31 @@ import type {
 
 const api = window.codexWebLauncher;
 const PANEL_TRANSITION = { duration: 0.3, ease: [0.16, 1, 0.3, 1] } as const;
+
+// The setup surface's HITL step and the always-mounted banner poll independently on their own
+// timers; without this, both hit the same launcher:hitl-status IPC handler (which runs a real
+// network probe) on every tick they overlap. Collapse overlapping polls into one round trip.
+const HITL_STATUS_DEDUPE_WINDOW_MS = 1_000;
+let hitlStatusInFlight: Promise<HitlStatus> | null = null;
+let hitlStatusCache: { at: number; status: HitlStatus } | null = null;
+function pollHitlStatus(): Promise<HitlStatus> {
+  if (hitlStatusInFlight) return hitlStatusInFlight;
+  if (hitlStatusCache && Date.now() - hitlStatusCache.at < HITL_STATUS_DEDUPE_WINDOW_MS) {
+    return Promise.resolve(hitlStatusCache.status);
+  }
+  hitlStatusInFlight = api!.hitlStatus().then(
+    (status) => {
+      hitlStatusCache = { at: Date.now(), status };
+      hitlStatusInFlight = null;
+      return status;
+    },
+    (error) => {
+      hitlStatusInFlight = null;
+      throw error;
+    },
+  );
+  return hitlStatusInFlight;
+}
 const COMPACT_SIDEBAR_QUERY = "(max-width: 820px)";
 const MCP_GUIDE_MEDIA = [
   new URL("./assets/mcp-create-tunnel.mp4", import.meta.url).href,
@@ -461,7 +486,7 @@ function LauncherShell({
     let cancelled = false;
     const poll = async () => {
       try {
-        const status = await api!.hitlStatus();
+        const status = await pollHitlStatus();
         if (!cancelled) setHitlShared(status);
       } catch {
         // The setup step reports HITL errors; the banner simply stays hidden.
@@ -1915,9 +1940,18 @@ function HitlSetupStep({
   useEffect(() => {
     void refresh();
     // The HITL server lives in its own terminal window, so poll to notice it starting or closing.
-    const timer = window.setInterval(() => void refresh(), 5_000);
+    // Interval ticks share a dedupe cache with the setup shell's own banner poll (pollHitlStatus);
+    // action-triggered refreshes above call the API directly for guaranteed-fresh post-mutation state.
+    const poll = async () => {
+      try {
+        setStatus(await pollHitlStatus());
+      } catch (cause) {
+        setError(messageOf(cause));
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 5_000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, setError]);
 
   const act = async (action: () => Promise<HitlStatus | unknown>) => {
     setBusy(true);
