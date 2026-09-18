@@ -5,6 +5,7 @@ import { isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigPath } from "../config";
 import {
   readLauncherBrowserHostDescriptor,
+  waitForLauncherDescriptor,
   type LauncherBrowserHostDescriptor,
 } from "../launcher-browser-host";
 
@@ -186,17 +187,11 @@ export async function waitForDevLauncher(
   descriptorPath: string,
   timeoutMs = 30_000,
 ): Promise<LauncherBrowserHostDescriptor> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError = "descriptor is not ready";
-  while (Date.now() < deadline) {
-    try {
-      return devDescriptor(descriptorPath);
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    await new Promise(resolveWait => setTimeout(resolveWait, 100));
-  }
-  throw new Error(`DEV launcher did not become ready within ${timeoutMs}ms: ${lastError}`);
+  return waitForLauncherDescriptor(descriptorPath, DEV_LAUNCHER_PROFILE, {
+    timeoutMs,
+    pollIntervalMs: 100,
+    label: "DEV launcher",
+  });
 }
 
 export async function launchDevProfile(

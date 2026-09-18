@@ -173,6 +173,50 @@ export function readLauncherBrowserHostDescriptor(configuredPath: string): Launc
   return descriptor;
 }
 
+export interface LauncherDescriptorPollDeps {
+  readDescriptor: (path: string) => LauncherBrowserHostDescriptor;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+}
+
+const defaultLauncherDescriptorPollDeps: LauncherDescriptorPollDeps = {
+  readDescriptor: readLauncherBrowserHostDescriptor,
+  sleep: ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms)),
+  now: () => Date.now(),
+};
+
+/**
+ * Polls `descriptorPath` until it holds a descriptor for the given launcher `profile`, or throws
+ * once `timeoutMs` elapses. Shared by the production HITL autostart flow (hitl/launcher-autostart.ts)
+ * and the isolated DEV profile flow (dev-chat/profile.ts), which differ only in which profile they
+ * require, how long they are willing to wait, and how often they poll.
+ */
+export async function waitForLauncherDescriptor(
+  descriptorPath: string,
+  profile: LauncherBrowserHostProfile,
+  options: { timeoutMs?: number; pollIntervalMs?: number; label?: string } = {},
+  deps: LauncherDescriptorPollDeps = defaultLauncherDescriptorPollDeps,
+): Promise<LauncherBrowserHostDescriptor> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 100;
+  const label = options.label ?? "Launcher";
+  const deadline = deps.now() + timeoutMs;
+  let lastError = "descriptor is not ready";
+  while (deps.now() < deadline) {
+    try {
+      const descriptor = deps.readDescriptor(descriptorPath);
+      if (descriptor.profile !== profile) {
+        throw new Error(`Launcher descriptor belongs to ${descriptor.profile}, not the ${profile} launcher`);
+      }
+      return descriptor;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await deps.sleep(pollIntervalMs);
+  }
+  throw new Error(`${label} did not become ready within ${timeoutMs}ms: ${lastError}`);
+}
+
 async function assertCdpReady(descriptor: LauncherBrowserHostDescriptor, timeoutMs: number): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

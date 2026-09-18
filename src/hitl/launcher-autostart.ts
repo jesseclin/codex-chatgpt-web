@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 import { findInstalledLauncherExecutable } from "../dev-chat/profile";
-import { readLauncherBrowserHostDescriptor, type LauncherBrowserHostDescriptor } from "../launcher-browser-host";
+import {
+  readLauncherBrowserHostDescriptor,
+  waitForLauncherDescriptor,
+  type LauncherBrowserHostDescriptor,
+} from "../launcher-browser-host";
 
 export interface LauncherAutostartDeps {
   readDescriptor: (path: string) => LauncherBrowserHostDescriptor;
@@ -24,14 +28,6 @@ const defaultDeps: LauncherAutostartDeps = {
   now: () => Date.now(),
 };
 
-function productionDescriptor(deps: LauncherAutostartDeps, path: string): LauncherBrowserHostDescriptor {
-  const descriptor = deps.readDescriptor(path);
-  if (descriptor.profile !== "production") {
-    throw new Error(`Launcher descriptor belongs to ${descriptor.profile}, not the production launcher`);
-  }
-  return descriptor;
-}
-
 /**
  * A foreground `serve --hitl` owns the Responses port, so nothing else starts the launcher that
  * hosts its ChatGPT browser. Without it every turn fails before reaching ChatGPT, which Codex shows
@@ -44,23 +40,17 @@ export async function ensureLauncherBrowserHost(
   deps: LauncherAutostartDeps = defaultDeps,
 ): Promise<"running" | "started"> {
   try {
-    productionDescriptor(deps, descriptorPath);
-    return "running";
+    const descriptor = deps.readDescriptor(descriptorPath);
+    if (descriptor.profile === "production") return "running";
   } catch {
     // Absent or stale: start the launcher, which rewrites its own descriptor once ready.
   }
   deps.startLauncher(deps.findExecutable());
-  const timeoutMs = options.timeoutMs ?? 60_000;
-  const deadline = deps.now() + timeoutMs;
-  let lastError = "descriptor is not ready";
-  while (deps.now() < deadline) {
-    await deps.sleep(250);
-    try {
-      productionDescriptor(deps, descriptorPath);
-      return "started";
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-  }
-  throw new Error(`Launcher did not become ready within ${timeoutMs}ms: ${lastError}`);
+  await waitForLauncherDescriptor(
+    descriptorPath,
+    "production",
+    { timeoutMs: options.timeoutMs ?? 60_000, pollIntervalMs: 250, label: "Launcher" },
+    deps,
+  );
+  return "started";
 }
