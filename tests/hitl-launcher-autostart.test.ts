@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { ensureLauncherBrowserHost, type LauncherAutostartDeps } from "../src/hitl/launcher-autostart";
 import type { LauncherBrowserHostDescriptor } from "../src/launcher-browser-host";
 
-function descriptor(profile: "production" | "development"): LauncherBrowserHostDescriptor {
-  return { profile } as LauncherBrowserHostDescriptor;
+function descriptor(profile: "production" | "development", pid = 4242): LauncherBrowserHostDescriptor {
+  return { profile, pid } as LauncherBrowserHostDescriptor;
 }
 
 function fakeDeps(readResults: Array<LauncherBrowserHostDescriptor | Error>) {
@@ -24,15 +24,15 @@ function fakeDeps(readResults: Array<LauncherBrowserHostDescriptor | Error>) {
 }
 
 test("a running production launcher is left alone", async () => {
-  const { deps, started } = fakeDeps([descriptor("production")]);
-  expect(await ensureLauncherBrowserHost("d.json", {}, deps)).toBe("running");
+  const { deps, started } = fakeDeps([descriptor("production", 111)]);
+  expect(await ensureLauncherBrowserHost("d.json", {}, deps)).toEqual({ status: "running", pid: 111 });
   expect(started).toEqual([]);
 });
 
 test("a missing launcher is started and awaited until its descriptor is valid", async () => {
   const missing = new Error("descriptor is missing");
-  const { deps, started } = fakeDeps([missing, missing, missing, descriptor("production")]);
-  expect(await ensureLauncherBrowserHost("d.json", {}, deps)).toBe("started");
+  const { deps, started } = fakeDeps([missing, missing, missing, descriptor("production", 222)]);
+  expect(await ensureLauncherBrowserHost("d.json", {}, deps)).toEqual({ status: "started", pid: 222 });
   expect(started).toEqual(["C:\\Launcher\\Codex Web GPT.exe"]);
 });
 

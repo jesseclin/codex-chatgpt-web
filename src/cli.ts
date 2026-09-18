@@ -641,9 +641,19 @@ async function main(): Promise<void> {
       if (config.browserHost === "launcher" && config.browserHostDescriptorPath) {
         try {
           const launcher = await ensureLauncherBrowserHost(config.browserHostDescriptorPath);
-          stdout.write(launcher === "started"
+          stdout.write(launcher.status === "started"
             ? "[hitl] started the Codex Web GPT launcher to host the ChatGPT browser\n"
             : "[hitl] Codex Web GPT launcher is running\n");
+          if (launcher.status === "started") {
+            // Only quit the launcher we ourselves started; one that was already running may be
+            // backing another session, and killing it out from under the user would be a surprise.
+            const quitLauncher = () => {
+              stdout.write("[hitl] quitting the Codex Web GPT launcher this session started\n");
+              try { process.kill(launcher.pid, "SIGTERM"); } catch { /* already exited */ }
+            };
+            process.once("SIGINT", quitLauncher);
+            process.once("SIGTERM", quitLauncher);
+          }
         } catch (error) {
           stdout.write(
             `[hitl] WARNING: the Codex Web GPT launcher is not available, so turns will fail until you open it: ${error instanceof Error ? error.message : String(error)}\n`,

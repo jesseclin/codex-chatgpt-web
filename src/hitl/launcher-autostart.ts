@@ -28,6 +28,13 @@ const defaultDeps: LauncherAutostartDeps = {
   now: () => Date.now(),
 };
 
+export interface LauncherAutostartResult {
+  status: "running" | "started";
+  /** The launcher process's pid, from its descriptor. Callers that started it (status "started")
+   * use this to quit it again on their own exit; a launcher that was already running is left alone. */
+  pid: number;
+}
+
 /**
  * A foreground `serve --hitl` owns the Responses port, so nothing else starts the launcher that
  * hosts its ChatGPT browser. Without it every turn fails before reaching ChatGPT, which Codex shows
@@ -38,19 +45,19 @@ export async function ensureLauncherBrowserHost(
   descriptorPath: string,
   options: { timeoutMs?: number } = {},
   deps: LauncherAutostartDeps = defaultDeps,
-): Promise<"running" | "started"> {
+): Promise<LauncherAutostartResult> {
   try {
     const descriptor = deps.readDescriptor(descriptorPath);
-    if (descriptor.profile === "production") return "running";
+    if (descriptor.profile === "production") return { status: "running", pid: descriptor.pid };
   } catch {
     // Absent or stale: start the launcher, which rewrites its own descriptor once ready.
   }
   deps.startLauncher(deps.findExecutable());
-  await waitForLauncherDescriptor(
+  const descriptor = await waitForLauncherDescriptor(
     descriptorPath,
     "production",
     { timeoutMs: options.timeoutMs ?? 60_000, pollIntervalMs: 250, label: "Launcher" },
     deps,
   );
-  return "started";
+  return { status: "started", pid: descriptor.pid };
 }
