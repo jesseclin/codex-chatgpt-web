@@ -16,6 +16,8 @@ import type {
   BrowserInteractionMode,
   BrowserState,
   DoctorReport,
+  HitlStatus,
+  SetupFileChange,
   Language,
   LauncherSnapshot,
   LauncherState,
@@ -451,6 +453,41 @@ function LauncherShell({
     if (show) await api!.showBrowser();
   }, []);
 
+  const hitlSupported = !devProfile && snapshot.platform === "win32";
+  const [hitlShared, setHitlShared] = useState<HitlStatus | null>(null);
+  const [hitlStartRequestedAt, setHitlStartRequestedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (!hitlSupported) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const status = await api!.hitlStatus();
+        if (!cancelled) setHitlShared(status);
+      } catch {
+        // The setup step reports HITL errors; the banner simply stays hidden.
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [hitlSupported]);
+  useEffect(() => {
+    if (hitlShared?.listening) setHitlStartRequestedAt(null);
+  }, [hitlShared?.listening]);
+  const hitlStarting = hitlStartRequestedAt !== null && Date.now() - hitlStartRequestedAt < 90_000;
+  const hitlBanner: HitlBanner | null = hitlShared?.listening
+    ? { state: "waiting", workspace: hitlShared.workspace, autoApprove: hitlShared.autoApprove }
+    : hitlStarting
+      ? { state: "starting", workspace: hitlShared?.workspace ?? null, autoApprove: hitlShared?.autoApprove ?? false }
+      : null;
+  const onHitlStarted = useCallback(() => {
+    setHitlStartRequestedAt(Date.now());
+    void activateBrowser(true).catch((cause) => setError(messageOf(cause)));
+  }, [activateBrowser, setError]);
+
   const toggleSidebar = () => {
     const next = !sidebarOpen;
     if (compactSidebar && next && surface === "browser") {
@@ -644,6 +681,7 @@ function LauncherShell({
                 browser={browser}
                 browserSlotRef={browserSlotRef}
                 copy={copy}
+                hitlBanner={hitlBanner}
                 interactionMode={snapshot.state.browserInteractionMode}
                 operation={operation}
                 platform={snapshot.platform}
@@ -653,6 +691,7 @@ function LauncherShell({
             {surface === "setup" ? (
               <SetupSurface
                 activateBrowser={activateBrowser}
+                onHitlStarted={onHitlStarted}
                 browser={browser}
                 copy={copy}
                 devProfile={devProfile}
@@ -797,10 +836,34 @@ function SidebarItem({
   );
 }
 
+interface HitlBanner {
+  state: "starting" | "waiting";
+  workspace: string | null;
+  autoApprove: boolean;
+}
+
+function HitlWaitingBanner({ banner, copy }: { banner: HitlBanner; copy: Copy }) {
+  const starting = banner.state === "starting";
+  return (
+    <div className={`hitl-waiting-banner${starting ? " is-starting" : ""}`} role="status">
+      <span className="hitl-waiting-dot" aria-hidden="true" />
+      <div>
+        <strong>{starting ? copy.hitlBannerStarting : copy.hitlBannerWaiting}</strong>
+        <p>
+          {copy.hitlBannerBody}
+          {banner.workspace ? <> <code>{banner.workspace}</code></> : null}
+          {banner.autoApprove ? ` · ${copy.hitlBannerAutoApprove}` : ""}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function BrowserSurface({
   browser,
   browserSlotRef,
   copy,
+  hitlBanner,
   interactionMode,
   operation,
   platform,
@@ -809,6 +872,7 @@ function BrowserSurface({
   browser: BrowserState | null;
   browserSlotRef: (node: HTMLDivElement | null) => void;
   copy: Copy;
+  hitlBanner: HitlBanner | null;
   interactionMode: BrowserInteractionMode;
   operation: OperationState | null;
   platform: string;
@@ -979,6 +1043,9 @@ function BrowserSurface({
         </button>
         {browser?.loading ? <i className="browser-loading-line" /> : null}
       </div>
+      {hitlBanner && browser?.status !== "running" && browser?.status !== "testing" ? (
+        <HitlWaitingBanner banner={hitlBanner} copy={copy} />
+      ) : null}
       {selectedManualTab
         && ["awaiting-user", "sent"].includes(selectedManualTab.manualState ?? "") ? (
         <ManualTurnGuide
@@ -1080,6 +1147,7 @@ function SetupSurface({
   browser,
   copy,
   devProfile,
+  onHitlStarted,
   operation,
   setError,
   showMcp,
@@ -1090,6 +1158,7 @@ function SetupSurface({
   browser: BrowserState | null;
   copy: Copy;
   devProfile: boolean;
+  onHitlStarted: () => void;
   operation: OperationState | null;
   setError: (error: string | null) => void;
   showMcp: () => void;
@@ -1127,10 +1196,28 @@ function SetupSurface({
     await api!.smokeTest();
     updateState((await api!.snapshot()).state);
   });
-  const install = () => run(async () => {
-    await api!.setupCore();
-    updateState((await api!.snapshot()).state);
-  });
+  const [modelsAdded, setModelsAdded] = useState(false);
+  const [changedFiles, setChangedFiles] = useState<SetupFileChange[] | null>(null);
+  // In terminal HITL mode the launcher runs no server, so Codex can only fetch the catalog once the
+  // step-4 terminal is up. Count the models as added once they are installed into Codex.
+  const installAwaitingHitl = !devProfile
+    && snapshot.terminalHitl === true
+    && snapshot.state.coreSetupComplete === true
+    && snapshot.state.codexCatalogVerified !== true;
+  const installComplete = snapshot.state.codexCatalogVerified === true || installAwaitingHitl;
+  const install = () => {
+    if (!devProfile && !window.confirm(copy.closeCodexBeforeInstall)) return;
+    void run(async () => {
+      setModelsAdded(false);
+      setChangedFiles(null);
+      const result = await api!.setupCore();
+      updateState((await api!.snapshot()).state);
+      if (!devProfile) {
+        setModelsAdded(true);
+        setChangedFiles(result.changedFiles ?? []);
+      }
+    });
+  };
   const setZeroRiskPro = (enabled: boolean) => run(async () => {
     updateState(await api!.setZeroRiskPro(enabled));
   });
@@ -1171,8 +1258,10 @@ function SetupSurface({
           action={snapshot.state.coreSetupComplete
             ? devProfile ? copy.devReinstall : copy.reinstall
             : devProfile ? copy.devInstall : copy.install}
-          complete={snapshot.state.codexCatalogVerified === true}
-          description={devProfile ? copy.devStepInstallBody : copy.stepInstallBody}
+          complete={installComplete}
+          description={devProfile
+            ? copy.devStepInstallBody
+            : installAwaitingHitl ? copy.stepInstallHitlPending : copy.stepInstallBody}
           disabled={busy || (!snapshot.smokePassed && snapshot.state.coreSetupComplete !== true)}
           index={manualInteraction ? 1 : 3}
           onAction={install}
@@ -1187,7 +1276,31 @@ function SetupSurface({
             />
           ) : undefined}
         />
+        {!devProfile && !manualInteraction ? (
+          <HitlSetupStep copy={copy} index={4} onStarted={onHitlStarted} setError={setError} />
+        ) : null}
       </div>
+
+      {modelsAdded ? (
+        <NoticeRow icon="check" tone="success">
+          {copy.launchCodexAfterInstall}
+        </NoticeRow>
+      ) : null}
+      {modelsAdded && changedFiles ? (
+        <div className="setup-file-changes">
+          <strong>{changedFiles.length > 0 ? copy.setupFilesChanged : copy.setupFilesUnchanged}</strong>
+          {changedFiles.length > 0 ? (
+            <ul>
+              {changedFiles.map(file => (
+                <li key={file.path}>
+                  <em>{copy[`setupFile_${file.change}`]}</em>
+                  <code>{file.path}</code>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       {!devProfile && snapshot.state.codexRestartRequired ? (
         <NoticeRow icon="alert" tone="warning">
@@ -1776,6 +1889,135 @@ function SettingsSurface({
   );
 }
 
+function HitlSetupStep({
+  copy,
+  index,
+  onStarted,
+  setError,
+}: {
+  copy: Copy;
+  index: number;
+  onStarted: () => void;
+  setError: (error: string | null) => void;
+}) {
+  const [status, setStatus] = useState<HitlStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api!.hitlStatus());
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [setError]);
+
+  useEffect(() => {
+    void refresh();
+    // The HITL server lives in its own terminal window, so poll to notice it starting or closing.
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const act = async (action: () => Promise<HitlStatus | unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await action();
+      if (result && typeof result === "object" && "command" in result) setStatus(result as HitlStatus);
+      else await refresh();
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyCommand = async () => {
+    if (!status) return;
+    try {
+      await api!.copyText(status.command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2_000);
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  };
+
+  if (!status?.supported) return null;
+  // Start stays available at all times: without a folder it asks for one first, and while a
+  // terminal is running it restarts it (the main process refuses only while a task is in flight).
+  const start = () => void act(async () => {
+    let current = status;
+    if (!current.workspace) {
+      current = await api!.chooseHitlWorkspace();
+      setStatus(current);
+      if (!current.workspace) return current;
+    }
+    const started = await api!.startHitl();
+    onStarted();
+    return started;
+  });
+  return (
+    <>
+      <SetupRow
+        action={status.listening ? copy.hitlRestart : copy.hitlStart}
+        complete={status.listening}
+        description={status.browserOnly ? copy.stepHitlBody : copy.hitlBrowserOnlyRequired}
+        disabled={busy}
+        index={index}
+        onAction={start}
+        onSecondaryAction={() => void act(() => api!.chooseHitlWorkspace())}
+        repeatable
+        secondaryAction={copy.hitlChooseWorkspace}
+        secondaryDisabled={busy}
+        title={copy.stepHitl}
+      />
+      {status.browserOnly ? (
+        <div className="hitl-panel">
+          <div className="hitl-panel-row">
+            <span>{copy.hitlWorkspace}</span>
+            <code>{status.workspace ?? copy.hitlNoWorkspace}</code>
+          </div>
+          <div className="hitl-panel-row">
+            <span>
+              <strong>{copy.hitlAutoApproveLabel}</strong>
+              <small>{copy.hitlAutoApproveBody}</small>
+            </span>
+            <Switch
+              checked={status.autoApprove}
+              disabled={busy}
+              onChange={(checked) => void act(() => api!.setPreference("hitlAutoApprove", checked))}
+            />
+          </div>
+          <div className="hitl-panel-row is-command">
+            <span>{copy.hitlCommandLabel}</span>
+            <div className="hitl-command">
+              <code>{status.command}</code>
+              <SecondaryButton disabled={!status.workspace} onClick={() => void copyCommand()}>
+                {copied ? copy.hitlCopied : copy.hitlCopy}
+              </SecondaryButton>
+            </div>
+          </div>
+          {status.enabled && !status.listening ? (
+            <div className="hitl-panel-row">
+              <span>{copy.hitlModeIdle}</span>
+              <SecondaryButton disabled={busy} onClick={() => void act(() => api!.disableHitl())}>
+                {copy.hitlDisable}
+              </SecondaryButton>
+            </div>
+          ) : null}
+          {status.listening ? (
+            <NoticeRow icon="check" tone="success">
+              {copy.hitlRunning}
+            </NoticeRow>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function ContentSurface({
   children,
   eyebrow,
@@ -1844,7 +2086,7 @@ function SetupRow({
       </div>
       <div className="setup-actions">
         {secondaryAction && onSecondaryAction ? (
-          <SecondaryButton disabled={secondaryDisabled || complete} onClick={onSecondaryAction}>
+          <SecondaryButton disabled={secondaryDisabled || (complete && !repeatable)} onClick={onSecondaryAction}>
             {secondaryAction}
           </SecondaryButton>
         ) : null}

@@ -29,6 +29,23 @@ export interface LauncherState {
   codexRestartRequired?: boolean;
   mcpGuideStep: number;
   sessionRefreshReminderAt: string | null;
+  hitlWorkspace?: string | null;
+  hitlAutoApprove?: boolean;
+}
+
+export interface SetupFileChange {
+  path: string;
+  change: "created" | "modified" | "deleted";
+}
+
+export interface HitlStatus {
+  supported: boolean;
+  browserOnly: boolean;
+  enabled: boolean;
+  listening: boolean;
+  workspace: string | null;
+  autoApprove: boolean;
+  command: string;
 }
 
 export interface BrowserState {
@@ -106,6 +123,8 @@ export interface LauncherSnapshot {
   connectorName: string;
   connectorNames: Record<BrowserInteractionMode, string>;
   mcpCredentialsConfigured: boolean;
+  /** Browser-only HITL: a terminal `serve --hitl` owns the port, so Codex is verified only once it runs. */
+  terminalHitl?: boolean;
   logs: LogRecord[];
   urls: {
     github: string;
@@ -148,7 +167,12 @@ export interface LauncherApi {
   doctor(): Promise<DoctorReport>;
   cancelTurns(): Promise<{ stdout: string }>;
   uninstallIntegration(): Promise<{ cancelled: true } | { cancelled: false; state: LauncherState }>;
-  setupCore(): Promise<{ ok: boolean; stdout: string; restartRequired: boolean }>;
+  setupCore(): Promise<{
+    ok: boolean;
+    stdout: string;
+    restartRequired: boolean;
+    changedFiles?: SetupFileChange[];
+  }>;
   setupMcp(input: {
     tunnelId?: string;
     runtimeKey?: string;
@@ -158,6 +182,11 @@ export interface LauncherApi {
   setMcpStep(step: number): Promise<LauncherState>;
   setAutostart(enabled: boolean): Promise<{ state: LauncherState; supported: boolean; enabled: boolean }>;
   setBiggerContext(enabled: boolean): Promise<LauncherState>;
+  hitlStatus(): Promise<HitlStatus>;
+  chooseHitlWorkspace(): Promise<HitlStatus>;
+  startHitl(): Promise<HitlStatus>;
+  disableHitl(): Promise<HitlStatus>;
+  copyText(text: string): Promise<boolean>;
   setSkillAttachments(enabled: boolean): Promise<LauncherState>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
@@ -166,7 +195,7 @@ export interface LauncherApi {
     targetMode: BrowserInteractionMode;
   }>;
   setPreference(
-    key: "keepRunningOnClose" | "showBrowserDuringTurns",
+    key: "keepRunningOnClose" | "showBrowserDuringTurns" | "hitlAutoApprove",
     value: boolean,
   ): Promise<LauncherState>;
   setSidebarState(state: { open: boolean; width: number }): Promise<LauncherState>;

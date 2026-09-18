@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import {
   DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS,
+  HITL_BATCH_EXAMPLE,
+  HITL_EXEC_DEFAULT_TIMEOUT_SECONDS,
+  HITL_EXEC_MAX_TIMEOUT_SECONDS,
+  HITL_SHELL_NOTE,
   EXEC_REJECTED_TEXT,
   formatExecResult,
   parseExecRequest,
@@ -130,4 +134,45 @@ test("documents the existing single-line limit: a command value with an embedded
     "[/EXEC_REQUEST]",
   ].join("\n");
   expect(parseExecRequest(text)?.command).toBe("codex exec -C /repo 'first line of the prompt");
+});
+
+test("HITL instructions ask the model to batch read-only queries using the real shell's separator", () => {
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("batch read-only inspection");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain(HITL_SHELL_NOTE);
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain(HITL_BATCH_EXAMPLE);
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("explicit paths");
+  if (process.platform === "win32") {
+    expect(HITL_SHELL_NOTE).toContain("cmd.exe");
+    expect(HITL_BATCH_EXAMPLE).toContain(" & ");
+    expect(HITL_BATCH_EXAMPLE).not.toContain(";");
+  } else {
+    expect(HITL_BATCH_EXAMPLE).toContain("; ");
+  }
+});
+
+test("the batching example is itself a valid single-line command field", () => {
+  const parsed = parseExecRequest(`[EXEC_REQUEST]\n${HITL_BATCH_EXAMPLE}\ncwd: .\n[/EXEC_REQUEST]`);
+  expect(parsed?.command).toBe(HITL_BATCH_EXAMPLE.slice("command: ".length));
+});
+
+test("the timeout field is parsed in seconds, clamped to the maximum, and ignored when invalid", () => {
+  const block = (timeout: string) => `[EXEC_REQUEST]\ncommand: npm test\ntimeout: ${timeout}\n[/EXEC_REQUEST]`;
+  expect(parseExecRequest(block("300"))?.timeoutSeconds).toBe(300);
+  expect(parseExecRequest(block("45s"))?.timeoutSeconds).toBe(45);
+  expect(parseExecRequest(block("120 seconds"))?.timeoutSeconds).toBe(120);
+  expect(parseExecRequest(block("99999"))?.timeoutSeconds).toBe(HITL_EXEC_MAX_TIMEOUT_SECONDS);
+  expect(parseExecRequest(block("0"))?.timeoutSeconds).toBeUndefined();
+  expect(parseExecRequest(block("soon"))?.timeoutSeconds).toBeUndefined();
+  expect(parseExecRequest("[EXEC_REQUEST]\ncommand: ls\n[/EXEC_REQUEST]")).toEqual({
+    command: "ls",
+    cwd: undefined,
+    reason: undefined,
+  });
+});
+
+test("HITL instructions teach the timeout field and keep commands inside the workspace", () => {
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("timeout: <optional seconds");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain(`stopped after ${HITL_EXEC_DEFAULT_TIMEOUT_SECONDS} seconds`);
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("never scan outside the workspace");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain(`set timeout: ${HITL_EXEC_MAX_TIMEOUT_SECONDS}`);
 });

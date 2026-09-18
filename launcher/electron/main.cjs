@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -20,6 +21,8 @@ const {
 const { BrowserHost, navigationErrorForLog } = require("./browser-host.cjs");
 const { BrowserControlServer } = require("./control-server.cjs");
 const { HitlPopupController } = require("./hitl-popup.cjs");
+const { hitlCommandLine, launchHitlTerminal, validateHitlWorkspace } = require("./hitl-terminal.cjs");
+const { diffFileSnapshots, snapshotFiles, watchedSetupFiles } = require("./setup-file-changes.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
 const {
   createLogger,
@@ -224,6 +227,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "Open Codex Web GPT",
     quit: "Quit",
     exportDiagnostics: "Export privacy-safe diagnostics",
+    chooseHitlWorkspace: "Choose HITL workspace folder",
     cancel: "Cancel",
     remove: "Remove",
     removeTitle: "Remove Codex Web GPT",
@@ -239,6 +243,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "打开 Codex Web GPT",
     quit: "退出",
     exportDiagnostics: "导出隐私安全诊断",
+    chooseHitlWorkspace: "选择 HITL 工作文件夹",
     cancel: "取消",
     remove: "移除",
     removeTitle: "移除 Codex Web GPT",
@@ -254,6 +259,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "開啟 Codex Web GPT",
     quit: "結束",
     exportDiagnostics: "匯出隱私安全診斷",
+    chooseHitlWorkspace: "選擇 HITL 工作資料夾",
     cancel: "取消",
     remove: "移除",
     removeTitle: "移除 Codex Web GPT",
@@ -269,6 +275,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "Codex Web GPT を開く",
     quit: "終了",
     exportDiagnostics: "プライバシー保護済みの診断情報をエクスポート",
+    chooseHitlWorkspace: "HITL の作業フォルダーを選択",
     cancel: "キャンセル",
     remove: "削除",
     removeTitle: "Codex Web GPT を削除",
@@ -284,6 +291,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "Codex Web GPT 열기",
     quit: "종료",
     exportDiagnostics: "개인정보가 보호된 진단 정보 내보내기",
+    chooseHitlWorkspace: "HITL 작업 폴더 선택",
     cancel: "취소",
     remove: "제거",
     removeTitle: "Codex Web GPT 제거",
@@ -511,6 +519,9 @@ function registerIpc({ logger, stateStore }) {
       manual: "Codex Zero Risk",
     },
     mcpCredentialsConfigured: runtimeHost?.mcpCredentialsConfigured() ?? false,
+    terminalHitl: (() => {
+      try { return runtimeSupervisor?.terminalHitlEnabled() === true; } catch { return false; }
+    })(),
     logs: logger.recent(),
     urls: { github: GITHUB_URL, x: X_URL, connectors: CONNECTORS_URL, tunnels: TUNNELS_URL, keys: KEYS_URL },
     platform: process.platform,
@@ -737,6 +748,13 @@ function registerIpc({ logger, stateStore }) {
     return { cancelled: false, state };
   });
   handle("launcher:setup-core", async () => {
+    if (!IS_DEV_PROFILE && runtimeSupervisor.terminalHitlEnabled()) {
+      const config = runtimeSupervisor.readSetupConfig();
+      if (config && await runtimeSupervisor.proxyHealth(config)) {
+        // Setup must bind the Responses port itself; a running `serve --hitl` holds it.
+        throw new Error("Close the HITL terminal window (step 4) before adding models, then start it again afterwards");
+      }
+    }
     const setupState = stateStore.read();
     if (setupState.browserInteractionMode === "automatic") {
       const browser = await browserHost.probeAuthentication();
@@ -758,7 +776,13 @@ function registerIpc({ logger, stateStore }) {
           : "Run the browser smoke test before installing the Codex integration",
       );
     }
+    const watchedFiles = IS_DEV_PROFILE
+      ? []
+      : watchedSetupFiles({ coreHome: CORE_HOME, codexHome: LAUNCHER_PROFILE.codexHome });
+    const filesBefore = snapshotFiles(watchedFiles);
     const result = IS_DEV_PROFILE ? await runtimeHost.setupDevCore() : await runtimeHost.setupCore();
+    const changedFiles = diffFileSnapshots(filesBefore, snapshotFiles(watchedFiles));
+    logger.info("setup.files_changed", { changedFiles });
     stateStore.update({
       coreSetupComplete: true,
       codexCatalogVerified: IS_DEV_PROFILE ? true : false,
@@ -780,7 +804,7 @@ function registerIpc({ logger, stateStore }) {
       });
     });
     if (!IS_DEV_PROFILE) startCatalogVerificationMonitor({ logger, stateStore });
-    return { ok: true, stdout: result.stdout, restartRequired: !IS_DEV_PROFILE };
+    return { ok: true, stdout: result.stdout, restartRequired: !IS_DEV_PROFILE, changedFiles };
   });
   handle("launcher:setup-mcp", async (_event, input) => {
     const currentMode = stateStore.read().browserInteractionMode;
@@ -905,11 +929,83 @@ function registerIpc({ logger, stateStore }) {
     return { state, credentialsRequired: false, targetMode: mode };
   });
   handle("launcher:set-preference", (_event, key, value) => {
-    const ordinary = key === "keepRunningOnClose" || key === "showBrowserDuringTurns";
+    const ordinary = key === "keepRunningOnClose" || key === "showBrowserDuringTurns" || key === "hitlAutoApprove";
     if (!ordinary) throw new Error("Unknown preference");
     return stateStore.update({ [key]: value === true });
   });
   handle("launcher:sidebar-state", (_event, value) => stateStore.update(validateSidebarState(value)));
+  const hitlServeArgs = (workspace, autoApprove) => [
+    "serve",
+    "--hitl",
+    "--workspace",
+    workspace,
+    ...(autoApprove ? ["--hitl-auto-approve"] : []),
+  ];
+  const hitlStatus = async () => {
+    const config = runtimeSupervisor.readSetupConfig();
+    const enabled = runtimeSupervisor.terminalHitlEnabled();
+    const state = stateStore.read();
+    return {
+      supported: !IS_DEV_PROFILE && process.platform === "win32",
+      browserOnly: config?.mode === "browser-only",
+      enabled,
+      listening: Boolean(enabled && config && await runtimeSupervisor.proxyHealth(config)),
+      workspace: state.hitlWorkspace,
+      autoApprove: state.hitlAutoApprove,
+      command: hitlCommandLine(state.hitlWorkspace, state.hitlAutoApprove),
+    };
+  };
+  const assertHitlSupported = () => {
+    if (IS_DEV_PROFILE) throw new Error("DEV profile HITL is started from the repository CLI");
+    if (process.platform !== "win32") throw new Error("Starting HITL from the launcher is currently supported on Windows only");
+  };
+  handle("launcher:hitl-status", () => hitlStatus());
+  handle("launcher:hitl-choose-workspace", async () => {
+    assertHitlSupported();
+    const current = stateStore.read().hitlWorkspace;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: nativeCopyFor(stateStore.read().language).chooseHitlWorkspace,
+      properties: ["openDirectory"],
+      ...(current ? { defaultPath: current } : {}),
+    });
+    if (result.canceled || !result.filePaths[0]) return hitlStatus();
+    stateStore.update({ hitlWorkspace: validateHitlWorkspace(result.filePaths[0]) });
+    return hitlStatus();
+  });
+  handle("launcher:hitl-start", async () => {
+    assertHitlSupported();
+    const workspace = validateHitlWorkspace(stateStore.read().hitlWorkspace);
+    await runtimeSupervisor.setTerminalHitlMode(true);
+    // Start doubles as restart: a running HITL server (e.g. with an older folder or approval
+    // setting) is stopped first, but only when it has no Codex task in flight.
+    const restarted = await runtimeSupervisor.stopTerminalHitlServer();
+    const config = runtimeSupervisor.readSetupConfig();
+    if (await runtimeSupervisor.proxyHealth(config)) {
+      throw new Error(`Another server is listening on port ${config.port}; close it before starting the HITL terminal`);
+    }
+    if (restarted) logger.info("launcher.hitl_terminal_restarting", { workspace });
+    launchHitlTerminal({
+      invocation: runtimeHost.command(hitlServeArgs(workspace, stateStore.read().hitlAutoApprove)),
+      scriptPath: path.join(CORE_HOME, "runtime", "hitl-terminal.cmd"),
+      environment: { ...process.env, CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR: BROWSER_DESCRIPTOR_PATH },
+    });
+    logger.info("launcher.hitl_terminal_started", { workspace });
+    return hitlStatus();
+  });
+  handle("launcher:hitl-disable", async () => {
+    assertHitlSupported();
+    const config = runtimeSupervisor.readSetupConfig();
+    if (runtimeSupervisor.terminalHitlEnabled() && config && await runtimeSupervisor.proxyHealth(config)) {
+      throw new Error("Close the HITL terminal window before leaving HITL mode");
+    }
+    await runtimeSupervisor.setTerminalHitlMode(false);
+    return hitlStatus();
+  });
+  handle("launcher:copy-text", (_event, text) => {
+    if (typeof text !== "string" || text.length > 4096) throw new Error("Clipboard text is invalid");
+    clipboard.writeText(text);
+    return true;
+  });
   handle("launcher:logs", (_event, limit) => logger.recent(limit));
   handle("launcher:export-logs", async () => {
     const date = new Date().toISOString().slice(0, 10);

@@ -98,7 +98,14 @@ test("setup preserves session-check failures and never installs without verified
       stateStore: { read: () => state, update() {} },
       browserHost: { probeAuthentication: async () => browser, returnToIdle: async () => {} },
       runtimeHost: { setupCore: run, setupDevCore: run, runtimeConfigSnapshot: () => ({ config: {} }) },
-      smokePassedThisSession: true, send() {}, startCatalogVerificationMonitor() {}, logger: {},
+      smokePassedThisSession: true, send() {}, startCatalogVerificationMonitor() {}, logger: { info() {} },
+      CORE_HOME: "/core", LAUNCHER_PROFILE: { codexHome: "/codex" },
+      watchedSetupFiles: () => [], snapshotFiles: () => new Map(), diffFileSnapshots: () => [],
+      runtimeSupervisor: {
+        terminalHitlEnabled: () => false,
+        readSetupConfig: () => ({ mode: "browser-only", port: 17841 }),
+        proxyHealth: async () => true,
+      },
     });
     await assert.rejects(setup, error => error.message === browser.message);
     assert.equal(installs, 0);
@@ -347,6 +354,45 @@ test("completed model setup remains a repeatable capability probe", () => {
   );
 });
 
+test("adding models is refused while a terminal HITL server holds the Responses port", async () => {
+  const vm = require("node:vm");
+  const source = electronMain.slice(
+    electronMain.indexOf('handle("launcher:setup-core",'),
+    electronMain.indexOf('handle("launcher:setup-mcp",'),
+  );
+  let setup;
+  let installs = 0;
+  let listening = true;
+  vm.runInNewContext(source, {
+    handle: (_name, handler) => { setup = handler; }, IS_DEV_PROFILE: false,
+    stateStore: { read: () => ({ browserInteractionMode: "automatic", coreSetupComplete: true }), update: () => ({}) },
+    browserHost: { probeAuthentication: async () => ({ authenticated: true }), returnToIdle: async () => {} },
+    runtimeHost: { setupCore: async () => { installs++; return { mode: "browser-only", stdout: "" }; }, runtimeConfigSnapshot: () => ({ config: {} }) },
+    smokePassedThisSession: true, send() {}, startCatalogVerificationMonitor() {}, logger: { info() {} },
+    CORE_HOME: "/core", LAUNCHER_PROFILE: { codexHome: "/codex" },
+    watchedSetupFiles: () => [], snapshotFiles: () => new Map(), diffFileSnapshots: () => [],
+    runtimeSupervisor: {
+      terminalHitlEnabled: () => true,
+      readSetupConfig: () => ({ mode: "browser-only", port: 17841 }),
+      proxyHealth: async () => listening,
+    },
+  });
+  await assert.rejects(setup, /Close the HITL terminal window/);
+  assert.equal(installs, 0);
+  listening = false;
+  await setup();
+  assert.equal(installs, 1);
+});
+
+test("starting the HITL terminal switches to the browser and shows a waiting banner", () => {
+  assert.match(appSource, /const started = await api!\.startHitl\(\);\s*onStarted\(\);/);
+  assert.match(appSource, /setHitlStartRequestedAt\(Date\.now\(\)\);\s*void activateBrowser\(true\)/);
+  assert.match(appSource, /hitlShared\?\.listening\s*\?\s*\{ state: "waiting"/);
+  assert.match(appSource, /<HitlWaitingBanner banner=\{hitlBanner\} copy=\{copy\} \/>/);
+  assert.match(appSource, /hitlBanner && browser\?\.status !== "running"/);
+  assert.match(stylesSource, /\.hitl-waiting-banner\s*\{/);
+});
+
 test("catalog verification reports a failed request instead of requesting another restart, then recovers", async () => {
   const vm = require("node:vm");
   const start = electronMain.indexOf("function startCatalogVerificationMonitor(");
@@ -388,4 +434,13 @@ test("catalog verification reports a failed request instead of requesting anothe
   assert.equal(state.codexCatalogVerified, true);
   assert.equal(state.codexRestartRequired, false);
   assert.ok(events.some(([event]) => event === "codex.model_catalog_verified"));
+});
+
+test("the HITL start button stays available and doubles as restart", () => {
+  const step = appSource.slice(appSource.indexOf("function HitlSetupStep("), appSource.indexOf("function ContentSurface("));
+  assert.match(step, /action=\{status\.listening \? copy\.hitlRestart : copy\.hitlStart\}/);
+  assert.match(step, /disabled=\{busy\}\s*index=\{index\}/);
+  assert.match(step, /if \(!current\.workspace\) \{\s*current = await api!\.chooseHitlWorkspace\(\);/);
+  assert.match(step, /repeatable/);
+  assert.match(electronMain, /const restarted = await runtimeSupervisor\.stopTerminalHitlServer\(\);/);
 });
