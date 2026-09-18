@@ -28,10 +28,20 @@ function validateHitlWorkspace(value) {
   return resolved;
 }
 
+// CommandLineToArgvW-style consumers (bun.exe, node.exe) close a quoted token on the first
+// unescaped `"`; a backslash run immediately before that `"` escapes it only when the run is odd,
+// so an odd trailing run (e.g. a drive root like "D:\") must be doubled or the closing quote is
+// swallowed and the token absorbs everything up to the next real closing quote.
+function quoteArgvToken(value) {
+  const trailingBackslashes = /\\+$/.exec(value);
+  if (!trailingBackslashes) return `"${value}"`;
+  return `"${value}${"\\".repeat(trailingBackslashes[0].length)}"`;
+}
+
 /** `invocation` is a runtime-command.cjs invocation whose args already end in the serve arguments. */
 function hitlTerminalScript(invocation) {
   const quoted = [invocation.executable, ...invocation.args]
-    .map((part, index) => `"${assertBatchSafe(part, index === 0 ? "Runtime executable" : "Runtime argument")}"`)
+    .map((part, index) => quoteArgvToken(assertBatchSafe(part, index === 0 ? "Runtime executable" : "Runtime argument")))
     .join(" ");
   return [
     "@echo off",
@@ -77,7 +87,7 @@ function launchHitlTerminal({
 /** The command a user pastes into their own terminal; the CLI wrapper name matches the installers. */
 function hitlCommandLine(workspace, autoApprove) {
   const folder = typeof workspace === "string" ? workspace.trim() : "";
-  const quoted = !folder ? "<project folder>" : /[\s&()^]/.test(folder) ? `"${folder}"` : folder;
+  const quoted = !folder ? "<project folder>" : /[\s&()^]/.test(folder) ? quoteArgvToken(folder) : folder;
   return `codex-chatgpt-web serve --hitl --workspace ${quoted}${autoApprove ? " --hitl-auto-approve" : ""}`;
 }
 

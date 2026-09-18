@@ -42,6 +42,14 @@ test("hitlTerminalScript quotes every part, keeps the window open on exit, and u
   assert.ok(script.trimEnd().endsWith("pause"));
 });
 
+test("hitlTerminalScript doubles a trailing backslash so a drive-root workspace does not swallow the next argument", () => {
+  const script = hitlTerminalScript({
+    ...invocation,
+    args: ["C:\\runtime\\app\\cli.js", "serve", "--hitl", "--workspace", "D:\\", "--hitl-auto-approve"],
+  });
+  assert.ok(script.includes('"--workspace" "D:\\\\" "--hitl-auto-approve"'));
+});
+
 test("hitlTerminalScript refuses arguments that would break out of batch quoting", () => {
   for (const bad of ['a"b', "a%PATH%b", "a\r\nb"]) {
     assert.throws(
@@ -103,5 +111,9 @@ test("hitlCommandLine builds the paste-ready serve command, quoting folders that
   assert.equal(
     hitlCommandLine(null, true),
     "codex-chatgpt-web serve --hitl --workspace <project folder> --hitl-auto-approve",
+  );
+  assert.equal(
+    hitlCommandLine("D:/my work\\", false),
+    "codex-chatgpt-web serve --hitl --workspace \"D:/my work\\\\\"",
   );
 });
