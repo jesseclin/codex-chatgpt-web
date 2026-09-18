@@ -25,7 +25,7 @@ const DEFAULT_STATE = Object.freeze({
   mcpGuideStep: 0,
   sessionRefreshReminderAt: null,
   hitlWorkspace: null,
-  hitlAutoApprove: true,
+  hitlAutoApprove: false,
 });
 
 function nextSessionRefreshReminderAt(now = Date.now()) {
