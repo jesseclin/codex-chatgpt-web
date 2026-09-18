@@ -100,6 +100,12 @@ function tunnelRuntimeStopped(health) {
     || (health?.state === "stopped" && health?.processRunning === false);
 }
 
+/** Terminal HITL mode: the launcher yields port ownership to a foreground `serve --hitl` process
+ * instead of supervising its own daemon. Accepts a possibly-null/undefined config. */
+function isTerminalHitlConfig(config) {
+  return Boolean(config && config.mode === "browser-only" && config.hitlEnabled === true);
+}
+
 function runtimeOwnershipPredatesCurrentBoot(state) {
   return Boolean(
     state
@@ -1132,7 +1138,7 @@ class RuntimeSupervisor {
   }
 
   async startDaemon(config) {
-    if (config.mode === "browser-only" && config.hitlEnabled === true) {
+    if (isTerminalHitlConfig(config)) {
       this.logger.info("runtime.start_daemon_skipped_for_terminal_hitl");
       return;
     }
@@ -1204,7 +1210,7 @@ class RuntimeSupervisor {
       this.clearState();
       return { status: "not-configured" };
     }
-    const terminalHitl = config.mode === "browser-only" && config.hitlEnabled === true;
+    const terminalHitl = isTerminalHitlConfig(config);
     const tunnelOnly = this.launcherProfile === "development" || terminalHitl;
     if (tunnelOnly && config.mode !== "full") {
       const ownershipState = this.readState();
@@ -1340,7 +1346,7 @@ class RuntimeSupervisor {
     const config = this.readConfig();
     if (!config) return;
     this.publishOperation?.({ name: "runtime-recovery", status: "running", message: `Restarting ${name}` });
-    const terminalHitl = config.mode === "browser-only" && config.hitlEnabled === true;
+    const terminalHitl = isTerminalHitlConfig(config);
     const tunnelOnly = this.launcherProfile === "development" || terminalHitl;
     if (name === "tunnel") {
       await this.startTunnel(config, "runtime-recovery", { forceRestart: true });
@@ -1442,7 +1448,7 @@ class RuntimeSupervisor {
   }
 
   async ownedRuntimeReady(config) {
-    if (this.launcherProfile === "development" || (config.mode === "browser-only" && config.hitlEnabled === true)) {
+    if (this.launcherProfile === "development" || isTerminalHitlConfig(config)) {
       return config.mode !== "full" || Boolean(this.tunnel && await this.tunnelHealth(config));
     }
     const daemon = this.daemon;
@@ -1742,7 +1748,7 @@ class RuntimeSupervisor {
       this.clearState();
       return false;
     }
-    const terminalHitl = config.mode === "browser-only" && config.hitlEnabled === true;
+    const terminalHitl = isTerminalHitlConfig(config);
     const tunnelOnly = this.launcherProfile === "development" || terminalHitl;
     if (tunnelOnly && processRunning(state.daemonPid)) {
       throw new Error(
@@ -1984,7 +1990,7 @@ class RuntimeSupervisor {
     let tunnelStopped = false;
     try {
       const ownershipState = this.readState();
-      const terminalHitl = config?.mode === "browser-only" && config?.hitlEnabled === true;
+      const terminalHitl = isTerminalHitlConfig(config);
       const healthyRuntime = config && this.launcherProfile !== "development" && !terminalHitl
         ? await this.proxyHealth(config)
         : false;
@@ -2075,14 +2081,21 @@ class RuntimeSupervisor {
   /** Terminal HITL mode means the launcher yields port ownership to a foreground `serve --hitl`
    * process instead of supervising its own daemon; the flag lives in the runtime config. */
   terminalHitlEnabled() {
-    const config = this.readSetupConfig();
-    return Boolean(config && config.mode === "browser-only" && config.hitlEnabled === true);
+    return isTerminalHitlConfig(this.readSetupConfig());
   }
 
   /** Gracefully stops a running terminal `serve --hitl` so a new terminal can take the port. Never
    * interrupts a Codex task: a busy server is resumed and the caller is told to retry later. */
   async stopTerminalHitlServer() {
-    const config = this.readConfig();
+    // terminalHitlEnabled() and setTerminalHitlMode() both read via the lenient readSetupConfig();
+    // a config that satisfies that check can still fail the strict validateConfig() readConfig()
+    // runs, so treat that failure the same as "no config" rather than let it escape uncaught.
+    let config;
+    try {
+      config = this.readConfig();
+    } catch {
+      return false;
+    }
     if (!config || !this.terminalHitlEnabled() || !await this.proxyHealth(config)) return false;
     const drained = await this.control(config, "drain");
     if (drained.active_http_turns > 0 || drained.active_browser_turns > 0) {

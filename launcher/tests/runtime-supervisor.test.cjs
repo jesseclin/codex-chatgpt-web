@@ -2232,3 +2232,19 @@ test("stopTerminalHitlServer is a no-op when no HITL server is listening", async
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("stopTerminalHitlServer is a no-op, not a thrown error, when the config passes the lenient setup check but fails strict validation", async () => {
+  const { root, supervisor } = terminalHitlSupervisor();
+  // readSetupConfig() (used by terminalHitlEnabled()) tolerates the legacy "pro-only" alias, but
+  // validateConfig() (used by readConfig()) requires an exact "browser-only"/"full" mode.
+  const raw = JSON.parse(fs.readFileSync(path.join(root, "config.json"), "utf8"));
+  raw.mode = "pro-only";
+  fs.writeFileSync(path.join(root, "config.json"), `${JSON.stringify(raw)}\n`);
+  supervisor.control = async () => assert.fail("must not contact a server");
+  try {
+    assert.equal(supervisor.terminalHitlEnabled(), true);
+    assert.equal(await supervisor.stopTerminalHitlServer(), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
