@@ -394,6 +394,12 @@ function Test-Runtime {
       } else {
         $Updated = [regex]::Replace($Text, '(?m)^(setlocal)(\r?)$', "`$1`$2`n$Line`$2", 1)
       }
+      # Neither anchor line matched (a wrapper shape this script does not recognize): report the
+      # failure instead of silently rewriting the file unchanged and claiming success.
+      if ($Updated -eq $Text) {
+        Add-Result "Runtime" "Wrapper CA setting" "FAIL" "$Wrapper has an unrecognized shape; could not add NODE_USE_SYSTEM_CA=1" "Add `"$Line`" to the wrapper manually, after its first line"
+        continue
+      }
       Copy-Item $Wrapper "$Wrapper.bak" -Force
       [IO.File]::WriteAllText($Wrapper, $Updated, (New-Object Text.UTF8Encoding $false))
       Add-Result "Runtime" "Wrapper CA setting" "FIXED" "added NODE_USE_SYSTEM_CA=1 to $Wrapper (backup: .bak)"
