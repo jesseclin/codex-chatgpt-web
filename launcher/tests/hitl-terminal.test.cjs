@@ -5,7 +5,9 @@ const os = require("node:os");
 const path = require("node:path");
 const {
   HITL_TERMINAL_TITLE,
+  findLinuxTerminalEmulator,
   hitlTerminalScript,
+  hitlTerminalShellScript,
   launchHitlTerminal,
   validateHitlWorkspace,
 } = require("../electron/hitl-terminal.cjs");
@@ -87,15 +89,96 @@ test("launchHitlTerminal writes the script and opens it in a detached visible co
   assert.equal(unrefCalled, true);
 });
 
-test("launchHitlTerminal is Windows-only", () => {
+test("launchHitlTerminal rejects unsupported platforms", () => {
   assert.throws(() => launchHitlTerminal({
     invocation,
-    scriptPath: "/tmp/hitl.cmd",
+    scriptPath: "/tmp/hitl.sh",
     environment: {},
-    platform: "darwin",
+    platform: "aix",
     writeFile: () => assert.fail("must not write"),
     spawnProcess: () => assert.fail("must not spawn"),
-  }), /Windows only/);
+  }), /Windows, macOS, and Linux only/);
+});
+
+const posixInvocation = {
+  executable: "/opt/codex/bun",
+  args: ["/opt/codex/app/cli.js", "serve", "--hitl", "--workspace", "/home/user/my project"],
+  cwd: "/opt/codex",
+};
+
+test("hitlTerminalShellScript quotes every part, keeps the window open, and embeds env overrides", () => {
+  const script = hitlTerminalShellScript(posixInvocation, { FOO: "b'ar" });
+  assert.ok(script.startsWith("#!/bin/sh\n"));
+  assert.ok(script.includes("export FOO='b'\\''ar'"));
+  assert.ok(script.includes("cd '/opt/codex' || exit 1"));
+  assert.ok(script.includes("'/opt/codex/bun' '/opt/codex/app/cli.js' 'serve' '--hitl' '--workspace' '/home/user/my project'"));
+  assert.ok(script.includes('echo "[codex-chatgpt-web] HITL server exited with code $status."'));
+  assert.ok(script.trimEnd().endsWith("read -r _"));
+});
+
+test("findLinuxTerminalEmulator returns the first candidate found on PATH", () => {
+  const found = findLinuxTerminalEmulator({ exists: cmd => cmd === "konsole" });
+  assert.equal(found.cmd, "konsole");
+  assert.deepEqual(found.args("/tmp/hitl.sh"), ["-e", "/tmp/hitl.sh"]);
+  assert.equal(findLinuxTerminalEmulator({ exists: () => false }), null);
+});
+
+test("launchHitlTerminal on darwin writes an executable script and opens it via Terminal.app", () => {
+  const writes = [];
+  const spawns = [];
+  launchHitlTerminal({
+    invocation: posixInvocation,
+    scriptPath: "/tmp/hitl-terminal.sh",
+    environment: { A: "1" },
+    envOverrides: { A: "1" },
+    platform: "darwin",
+    writeFile: (file, content, options) => writes.push({ file, content, options }),
+    spawnProcess: (command, args, options) => {
+      spawns.push({ command, args, options });
+      return { unref: () => {} };
+    },
+  });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].file, "/tmp/hitl-terminal.sh");
+  assert.equal(writes[0].options.mode, 0o700);
+  assert.ok(writes[0].content.includes("export A='1'"));
+  assert.equal(spawns[0].command, "osascript");
+  assert.ok(spawns[0].args.some(arg => arg.includes("/tmp/hitl-terminal.sh")));
+});
+
+test("launchHitlTerminal on linux spawns the detected emulator with the script as its exec target", () => {
+  const writes = [];
+  const spawns = [];
+  launchHitlTerminal({
+    invocation: posixInvocation,
+    scriptPath: "/tmp/hitl-terminal.sh",
+    environment: { A: "1" },
+    platform: "linux",
+    findEmulator: () => ({ cmd: "xterm", args: script => ["-e", script] }),
+    writeFile: (file, content, options) => writes.push({ file, content, options }),
+    spawnProcess: (command, args, options) => {
+      spawns.push({ command, args, options });
+      return { unref: () => {} };
+    },
+  });
+  assert.equal(writes[0].options.mode, 0o700);
+  assert.deepEqual(spawns[0], {
+    command: "xterm",
+    args: ["-e", "/tmp/hitl-terminal.sh"],
+    options: { detached: true, env: { A: "1" }, stdio: "ignore" },
+  });
+});
+
+test("launchHitlTerminal on linux throws when no terminal emulator is found", () => {
+  assert.throws(() => launchHitlTerminal({
+    invocation: posixInvocation,
+    scriptPath: "/tmp/hitl-terminal.sh",
+    environment: {},
+    platform: "linux",
+    findEmulator: () => null,
+    writeFile: () => assert.fail("must not write"),
+    spawnProcess: () => assert.fail("must not spawn"),
+  }), /No terminal emulator found/);
 });
 
 test("hitlCommandLine builds the paste-ready serve command, quoting folders that need it", () => {

@@ -56,32 +56,114 @@ function hitlTerminalScript(invocation) {
   ].join("\r\n");
 }
 
+// Single-quoting is the only safe POSIX shell escape: everything inside '...' is literal except
+// a literal single quote itself, which must close the quote, emit an escaped quote, and reopen it.
+function quoteShellToken(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+/** `invocation` is a runtime-command.cjs invocation whose args already end in the serve arguments.
+ * `envOverrides` is embedded as `export` lines rather than relied on from the spawned process's own
+ * environment: macOS's "do script" hands the command to Terminal.app over Apple Events, which opens
+ * an unrelated login shell that never inherits osascript's environment. */
+function hitlTerminalShellScript(invocation, envOverrides = {}) {
+  const quoted = [invocation.executable, ...invocation.args].map(quoteShellToken).join(" ");
+  const exports = Object.entries(envOverrides).map(([key, value]) => `export ${key}=${quoteShellToken(value)}`);
+  return [
+    "#!/bin/sh",
+    ...exports,
+    `cd ${quoteShellToken(invocation.cwd)} || exit 1`,
+    quoted,
+    "status=$?",
+    "echo",
+    `echo "[codex-chatgpt-web] HITL server exited with code $status."`,
+    'printf "Press Enter to close..."',
+    "read -r _",
+    "",
+  ].join("\n");
+}
+
+// Checked in this order on Linux; each entry names its own exec-argument convention (gnome-terminal
+// uses "--" to mark the exec form, the rest accept "-e <command>").
+const LINUX_TERMINAL_CANDIDATES = [
+  { cmd: "x-terminal-emulator", args: script => ["-e", script] },
+  { cmd: "gnome-terminal", args: script => ["--", script] },
+  { cmd: "konsole", args: script => ["-e", script] },
+  { cmd: "xfce4-terminal", args: script => ["-e", script] },
+  { cmd: "mate-terminal", args: script => ["-e", script] },
+  { cmd: "tilix", args: script => ["-e", script] },
+  { cmd: "terminator", args: script => ["-x", script] },
+  { cmd: "alacritty", args: script => ["-e", script] },
+  { cmd: "kitty", args: script => [script] },
+  { cmd: "xterm", args: script => ["-e", script] },
+];
+
+function commandExists(cmd, { path: pathEnv = process.env.PATH, exists = fs.existsSync } = {}) {
+  const dirs = (pathEnv || "").split(path.delimiter).filter(Boolean);
+  return dirs.some(dir => exists(path.join(dir, cmd)));
+}
+
+function findLinuxTerminalEmulator({ exists = commandExists } = {}) {
+  return LINUX_TERMINAL_CANDIDATES.find(candidate => exists(candidate.cmd)) ?? null;
+}
+
 /** Opens a new console window so the daemon gets a real TTY: HITL refuses to activate without one,
  * and the operator can approve from that terminal as well as from the launcher popup. */
 function launchHitlTerminal({
   invocation,
   scriptPath,
   environment,
+  envOverrides = {},
   platform = process.platform,
   spawnProcess = spawn,
   writeFile = writePrivateFileAtomic,
+  findEmulator = findLinuxTerminalEmulator,
 }) {
-  if (platform !== "win32") throw new Error("Starting HITL from the launcher is currently supported on Windows only");
-  assertBatchSafe(scriptPath, "HITL script path");
-  writeFile(scriptPath, hitlTerminalScript(invocation));
-  const child = spawnProcess(
-    "cmd.exe",
-    ["/d", "/c", "start", `"${HITL_TERMINAL_TITLE}"`, "cmd.exe", "/d", "/c", `"${scriptPath}"`],
-    {
+  if (platform === "win32") {
+    assertBatchSafe(scriptPath, "HITL script path");
+    writeFile(scriptPath, hitlTerminalScript(invocation));
+    const child = spawnProcess(
+      "cmd.exe",
+      ["/d", "/c", "start", `"${HITL_TERMINAL_TITLE}"`, "cmd.exe", "/d", "/c", `"${scriptPath}"`],
+      {
+        detached: true,
+        env: environment,
+        stdio: "ignore",
+        windowsHide: false,
+        windowsVerbatimArguments: true,
+      },
+    );
+    child.unref?.();
+    return child;
+  }
+  if (platform === "darwin") {
+    writeFile(scriptPath, hitlTerminalShellScript(invocation, envOverrides), { mode: 0o700 });
+    const child = spawnProcess(
+      "osascript",
+      [
+        "-e",
+        `tell application "Terminal" to do script "${scriptPath.replace(/[\\"]/g, "\\$&")}"`,
+        "-e",
+        'tell application "Terminal" to activate',
+      ],
+      { detached: true, env: environment, stdio: "ignore" },
+    );
+    child.unref?.();
+    return child;
+  }
+  if (platform === "linux") {
+    const emulator = findEmulator();
+    if (!emulator) throw new Error("No terminal emulator found; install one such as gnome-terminal or xterm to use HITL");
+    writeFile(scriptPath, hitlTerminalShellScript(invocation, envOverrides), { mode: 0o700 });
+    const child = spawnProcess(emulator.cmd, emulator.args(scriptPath), {
       detached: true,
       env: environment,
       stdio: "ignore",
-      windowsHide: false,
-      windowsVerbatimArguments: true,
-    },
-  );
-  child.unref?.();
-  return child;
+    });
+    child.unref?.();
+    return child;
+  }
+  throw new Error("Starting HITL from the launcher is currently supported on Windows, macOS, and Linux only");
 }
 
 /** The command a user pastes into their own terminal; the CLI wrapper name matches the installers. */
@@ -93,8 +175,10 @@ function hitlCommandLine(workspace, autoApprove) {
 
 module.exports = {
   HITL_TERMINAL_TITLE,
+  findLinuxTerminalEmulator,
   hitlCommandLine,
   hitlTerminalScript,
+  hitlTerminalShellScript,
   launchHitlTerminal,
   validateHitlWorkspace,
 };

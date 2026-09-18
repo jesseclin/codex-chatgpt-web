@@ -57,6 +57,7 @@ const BROWSER_HELPER_PATH = app.isPackaged
   ? path.join(process.resourcesPath, "runtime", "app", "browser-helper.cjs")
   : path.join(SOURCE_ROOT, ".launcher-runtime", "browser-helper.cjs");
 const GITHUB_URL = "https://github.com/miuuyy/codex-chatgpt-web";
+const HITL_SUPPORTED_PLATFORMS = new Set(["win32", "darwin", "linux"]);
 const X_URL = "https://x.com/miu21590";
 const CONNECTORS_URL = "https://chatgpt.com/#settings/Plugins";
 const TUNNELS_URL = "https://platform.openai.com/settings/organization/tunnels";
@@ -946,7 +947,7 @@ function registerIpc({ logger, stateStore }) {
     const enabled = runtimeSupervisor.terminalHitlEnabled();
     const state = stateStore.read();
     return {
-      supported: !IS_DEV_PROFILE && process.platform === "win32",
+      supported: !IS_DEV_PROFILE && HITL_SUPPORTED_PLATFORMS.has(process.platform),
       browserOnly: config?.mode === "browser-only",
       enabled,
       listening: Boolean(enabled && config && await runtimeSupervisor.proxyHealth(config)),
@@ -957,7 +958,9 @@ function registerIpc({ logger, stateStore }) {
   };
   const assertHitlSupported = () => {
     if (IS_DEV_PROFILE) throw new Error("DEV profile HITL is started from the repository CLI");
-    if (process.platform !== "win32") throw new Error("Starting HITL from the launcher is currently supported on Windows only");
+    if (!HITL_SUPPORTED_PLATFORMS.has(process.platform)) {
+      throw new Error("Starting HITL from the launcher is currently supported on Windows, macOS, and Linux only");
+    }
   };
   handle("launcher:hitl-status", () => hitlStatus());
   handle("launcher:hitl-choose-workspace", async () => {
@@ -986,8 +989,9 @@ function registerIpc({ logger, stateStore }) {
     if (restarted) logger.info("launcher.hitl_terminal_restarting", { workspace });
     launchHitlTerminal({
       invocation: runtimeHost.command(hitlServeArgs(workspace, stateStore.read().hitlAutoApprove)),
-      scriptPath: path.join(CORE_HOME, "runtime", "hitl-terminal.cmd"),
+      scriptPath: path.join(CORE_HOME, "runtime", process.platform === "win32" ? "hitl-terminal.cmd" : "hitl-terminal.sh"),
       environment: { ...process.env, CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR: BROWSER_DESCRIPTOR_PATH },
+      envOverrides: { CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR: BROWSER_DESCRIPTOR_PATH },
     });
     logger.info("launcher.hitl_terminal_started", { workspace });
     return hitlStatus();

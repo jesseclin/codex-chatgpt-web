@@ -478,7 +478,7 @@ function LauncherShell({
     if (show) await api!.showBrowser();
   }, []);
 
-  const hitlSupported = !devProfile && snapshot.platform === "win32";
+  const hitlSupported = !devProfile;
   const [hitlShared, setHitlShared] = useState<HitlStatus | null>(null);
   const [hitlStartRequestedAt, setHitlStartRequestedAt] = useState<number | null>(null);
   useEffect(() => {
