@@ -7,6 +7,9 @@ export interface ExecProposal {
   /** Identifies the requesting turn when several can prompt on one terminal (daemon HITL).
    * Absent for single-session callers such as `dev chat`, whose rendering is unchanged. */
   traceId?: string;
+  /** `patch`: `command` is the full apply_patch text (not a shell command), and an approval
+   * returns the patch to apply, which may be an edited copy. Defaults to a shell command. */
+  kind?: "command" | "patch";
 }
 
 export type ApprovalDecision =
@@ -20,6 +23,18 @@ export interface ApprovalGateway {
 type TtyInput = NodeJS.ReadableStream & { isTTY?: boolean };
 
 function renderProposal(proposal: ExecProposal): string {
+  if (proposal.kind === "patch") {
+    return `${[
+      "======================= [AI PATCH PROPOSAL] ===========================",
+      ...(proposal.traceId ? [`Turn   : ${proposal.traceId}`] : []),
+      `Reason : ${proposal.reason ?? "(none given)"}`,
+      `Dir    : ${proposal.cwd}`,
+      "Patch  :",
+      proposal.command,
+      "-----------------------------------------------------------------------",
+      "[Enter / y] Apply   [n / Esc] Reject",
+    ].join("\n")}\n> `;
+  }
   const lines = [
     "======================= [AI EXECUTION PROPOSAL] =======================",
     ...(proposal.traceId ? [`Turn   : ${proposal.traceId}`] : []),
@@ -41,7 +56,7 @@ export class AutoApproveGateway implements ApprovalGateway {
   async request(proposal: ExecProposal, signal?: AbortSignal): Promise<ApprovalDecision> {
     if (signal?.aborted) return { action: "reject" };
     this.output.write(
-      `[hitl] auto-approved${proposal.traceId ? ` (turn ${proposal.traceId})` : ""}: ${proposal.command}\n`
+      `[hitl] auto-approved${proposal.traceId ? ` (turn ${proposal.traceId})` : ""}: ${proposal.kind === "patch" ? `apply_patch\n${proposal.command}` : proposal.command}\n`
         + `       dir: ${proposal.cwd}${proposal.reason ? `\n       reason: ${proposal.reason}` : ""}\n`,
     );
     return { action: "run", command: proposal.command };
@@ -73,7 +88,8 @@ export class TtyApprovalGateway implements ApprovalGateway {
       // Fail closed: only an explicit Enter/"y" runs as-is. Anything unrecognized
       // (garbage input, a stray keystroke) rejects rather than silently executing.
       if (answer === undefined || answer === "n" || answer === "esc") return { action: "reject" };
-      if (answer === "c") {
+      // A patch is multi-line, which a single readline answer cannot edit; the launcher popup can.
+      if (answer === "c" && proposal.kind !== "patch") {
         this.output.write(`Edit command (Enter to keep):\n${proposal.command}\n> `);
         const edited = await this.questionOrAbort(reader, "", signal);
         if (edited === undefined) return { action: "reject" };

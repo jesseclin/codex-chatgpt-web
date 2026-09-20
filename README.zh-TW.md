@@ -157,6 +157,13 @@ codex-chatgpt-web serve --hitl --workspace D:\path\to\your\project
 shell 指令來委派獨立的子任務（例如針對單一檔案進行範圍受限的程式碼審查），並透過第二次
 `[EXEC_REQUEST]` 讀回結果。
 
+檔案編輯使用獨立的區塊。Codex 的 `apply_patch` 內建於 Codex CLI，並不是 `PATH` 上的程式，而且
+`[EXEC_REQUEST]` 的指令只有一行，因此模型會改為輸出包含修補的 `[APPLY_PATCH]` 區塊。終端機會顯示帶有完整修補的
+**AI PATCH PROPOSAL**，按 Enter/`y` 後透過 `PATH` 上的 `codex` CLI 套用（`n`/Esc 拒絕；啟動器的核准彈出視窗中可以
+編輯修補）。修補涉及的每個檔案都必須位於工作區根目錄之內，否則會不經提示直接被攔截；使用
+`--hitl-auto-approve` 時，修補與指令一樣會立即套用。修補大小上限約為 100 KB（Windows 上為 30 KB），
+更大的變更由模型拆分。
+
 如果你正在這個儲存庫中進行開發（例如測試一個尚未併入官方發行版的分支上的本機修改），請從原始碼
 建置並安裝這兩者，而不要下載上面預先建置好的二進位檔案，這樣安裝的 `codex-chatgpt-web` 與
 **Codex Web GPT** 才會真正反映你的修改：

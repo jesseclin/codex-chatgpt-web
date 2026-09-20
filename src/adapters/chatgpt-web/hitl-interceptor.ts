@@ -1,5 +1,5 @@
-import { parseExecRequest } from "../../hitl/protocol";
-import { runApprovedCommand, type RawExecRequest } from "../../hitl/exec";
+import { parseExecRequest, parsePatchRequest } from "../../hitl/protocol";
+import { runApprovedCommand, runApprovedPatch, type RawExecRequest, type RawPatchRequest } from "../../hitl/exec";
 import type { ApprovalDecision, ApprovalGateway, ExecProposal } from "../../hitl/approval";
 
 export interface HitlExecGate {
@@ -17,13 +17,24 @@ export interface HitlExecGateDeps {
   workspaceCwd: string;
   /** Injected for testability; defaults to the real src/hitl/exec.ts implementation. */
   runCommand?: (gateway: ApprovalGateway, request: RawExecRequest, workspaceCwd: string) => Promise<string>;
+  /** Injected for testability; defaults to the real src/hitl/exec.ts patch implementation. */
+  runPatch?: (gateway: ApprovalGateway, request: RawPatchRequest, workspaceCwd: string) => Promise<string>;
 }
+
+/** Marks that open a protocol block the gate handles itself (and Codex must never see). */
+const BLOCK_OPENERS = ["[EXEC_REQUEST", "[APPLY_PATCH"] as const;
 
 export function createHitlExecGate(deps: HitlExecGateDeps): HitlExecGate {
   const runCommand = deps.runCommand ?? runApprovedCommand;
+  const runPatch = deps.runPatch ?? runApprovedPatch;
   return {
     async check(finalText, abortSignal) {
-      const request = parseExecRequest(finalText);
+      const execRequest = parseExecRequest(finalText);
+      const patchRequest = parsePatchRequest(finalText);
+      // Only the first block is honored when a reply somehow holds both kinds.
+      const patchFirst = patchRequest !== undefined
+        && (execRequest === undefined || finalText.indexOf("[APPLY_PATCH]") < finalText.indexOf("[EXEC_REQUEST]"));
+      const request = patchFirst ? patchRequest : execRequest;
       if (!request) return { action: "finalize" };
       // The turn is already gone: nothing to resume into, and nothing may be spawned on its behalf.
       if (abortSignal?.aborted) return { action: "finalize" };
@@ -40,7 +51,9 @@ export function createHitlExecGate(deps: HitlExecGateDeps): HitlExecGate {
           },
         }
         : deps.approvalGateway;
-      const followUpText = await runCommand(gateway, request, deps.workspaceCwd);
+      const followUpText = patchFirst
+        ? await runPatch(gateway, request as RawPatchRequest, deps.workspaceCwd)
+        : await runCommand(gateway, request as RawExecRequest, deps.workspaceCwd);
       if (abortSignal?.aborted) return { action: "finalize" };
       return { action: "resume", followUpText };
     },
@@ -79,7 +92,7 @@ export class HitlApprovalQueue {
 }
 
 /**
- * Withholds the raw `[EXEC_REQUEST]...[/EXEC_REQUEST]` protocol block from
+ * Withholds the raw `[EXEC_REQUEST]...[/EXEC_REQUEST]` (or `[APPLY_PATCH]...[/APPLY_PATCH]`) protocol block from
  * reaching Codex's transcript. Buffers `text_delta` text since the last
  * flush; flushes verbatim once the buffered text can no longer be a prefix
  * of `[EXEC_REQUEST]`, or drops it once it completes a well-formed block
@@ -124,7 +137,7 @@ export function createHitlEmitFilter<TEvent extends { type: string; text?: strin
     const candidate = buffered + event.text;
 
     // Check if we have a complete, well-formed protocol block
-    if (parseExecRequest(candidate)) {
+    if (parseExecRequest(candidate) || parsePatchRequest(candidate)) {
       // Drop it entirely
       bufferedEvents = [];
       buffered = "";
@@ -132,7 +145,7 @@ export function createHitlEmitFilter<TEvent extends { type: string; text?: strin
     }
 
     // Check if we're in the middle of building a protocol block (has opening tag)
-    if (candidate.includes("[EXEC_REQUEST")) {
+    if (BLOCK_OPENERS.some(opener => candidate.includes(opener))) {
       // Buffer to wait for closing tag
       bufferedEvents.push(event);
       buffered = candidate;
@@ -146,7 +159,7 @@ export function createHitlEmitFilter<TEvent extends { type: string; text?: strin
     }
 
     // If buffered text is a strict prefix of "[EXEC_REQUEST", keep building
-    if (buffered && "[EXEC_REQUEST".startsWith(buffered)) {
+    if (buffered && BLOCK_OPENERS.some(opener => opener.startsWith(buffered))) {
       bufferedEvents.push(event);
       buffered = candidate;
       return;
@@ -162,7 +175,7 @@ export function createHitlEmitFilter<TEvent extends { type: string; text?: strin
     flushBuffered();
 
     // Now check if the new event text alone is a potential prefix of "[EXEC_REQUEST"
-    if ("[EXEC_REQUEST".startsWith(event.text)) {
+    if (BLOCK_OPENERS.some(opener => opener.startsWith(event.text!))) {
       // Could be starting a protocol block, buffer it
       bufferedEvents = [event];
       buffered = event.text;

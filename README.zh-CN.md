@@ -157,6 +157,13 @@ codex-chatgpt-web serve --hitl --workspace D:\path\to\your\project
 shell 命令来委派独立的子任务（例如对单个文件进行范围受限的代码审查），并通过第二次
 `[EXEC_REQUEST]` 读回结果。
 
+文件编辑使用单独的代码块。Codex 的 `apply_patch` 内置于 Codex CLI，并不是 `PATH` 上的程序，而且
+`[EXEC_REQUEST]` 的命令只有一行，因此模型会改为输出包含补丁的 `[APPLY_PATCH]` 块。终端会显示带有完整补丁的
+**AI PATCH PROPOSAL**，按 Enter/`y` 后通过 `PATH` 上的 `codex` CLI 应用（`n`/Esc 拒绝；启动器的批准弹窗中可以
+编辑补丁）。补丁涉及的每个文件都必须位于工作区根目录之内，否则会不经提示直接被拦截；使用
+`--hitl-auto-approve` 时，补丁与命令一样会立即应用。补丁大小上限约为 100 KB（Windows 上为 30 KB），
+更大的改动由模型拆分。
+
 如果你正在这个仓库中进行开发（例如测试一个尚未合并进官方发行版的分支上的本地修改），请从源码
 构建并安装这两者，而不要下载上面预先构建好的二进制文件，这样安装的 `codex-chatgpt-web` 和
 **Codex Web GPT** 才会真正反映你的修改：

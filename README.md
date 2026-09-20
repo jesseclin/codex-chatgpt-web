@@ -193,6 +193,15 @@ delegate independent sub-tasks by running `codex exec` non-interactively as an a
 command (e.g. a scoped code review of one file), reading the result back with a second
 `[EXEC_REQUEST]`.
 
+File edits use a separate block. Codex's `apply_patch` is built into the Codex CLI rather than a
+program on `PATH`, and an `[EXEC_REQUEST]` command is a single line, so the model instead emits an
+`[APPLY_PATCH]` block containing the patch. The terminal shows an **AI PATCH PROPOSAL** with the whole
+patch and applies it through the `codex` CLI found on `PATH` once you press Enter/`y` (`n`/Esc
+rejects; the launcher's approval popup lets you edit the patch). Every file the patch touches must
+stay inside the workspace root, or it is blocked without prompting; with `--hitl-auto-approve`
+patches apply immediately, like commands. A patch is limited to about 100 KB (30 KB on Windows), so
+the model splits larger changes.
+
 If you're working from this repo (e.g. testing a fork with local changes not yet in an official
 release), build and install both pieces from source instead of downloading the prebuilt release
 binaries above, so the installed `codex-chatgpt-web` and **Codex Web GPT** actually reflect your

@@ -6,6 +6,13 @@ export interface ParsedExecRequest {
   timeoutSeconds?: number;
 }
 
+export interface ParsedPatchRequest {
+  /** The complete `*** Begin Patch` ... `*** End Patch` envelope, verbatim. */
+  patch: string;
+  cwd?: string;
+  reason?: string;
+}
+
 /** Most commands are quick lookups; a slow one should fail fast instead of stalling the turn. */
 export const HITL_EXEC_DEFAULT_TIMEOUT_SECONDS = 60;
 /** Upper bound a request may ask for, e.g. a test run or a delegated `codex exec` sub-task. */
@@ -45,6 +52,47 @@ export function parseExecRequest(text: string): ParsedExecRequest | undefined {
   };
 }
 
+const PATCH_REQUEST_BLOCK = /\[APPLY_PATCH\]\s*([\s\S]*?)\s*\[\/APPLY_PATCH\]/;
+const PATCH_BEGIN = "*** Begin Patch";
+const PATCH_END = "*** End Patch";
+const PATCH_TARGET_LINE = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$/;
+
+/** Parses the first well-formed `[APPLY_PATCH]` block. The patch is everything from the first
+ * `*** Begin Patch` line to the last `*** End Patch` line, whether or not the model wrapped it in a
+ * code fence (a fence is what keeps the rich-text rendering from mangling `+`/`-` lines). A block
+ * without a complete envelope returns undefined so the text is treated as an ordinary answer. */
+export function parsePatchRequest(text: string): ParsedPatchRequest | undefined {
+  const match = PATCH_REQUEST_BLOCK.exec(text);
+  if (!match) return undefined;
+  const lines = match[1]!.split(/\r\n|\n|\r/);
+  const begin = lines.findIndex(line => line.trimEnd() === PATCH_BEGIN);
+  let end = -1;
+  for (let index = lines.length - 1; index > begin && begin >= 0; index--) {
+    if (lines[index]!.trimEnd() === PATCH_END) { end = index; break; }
+  }
+  if (begin < 0 || end < 0) return undefined;
+  const fields: Partial<Record<ExecRequestField, string>> = {};
+  for (const line of lines.slice(0, begin)) {
+    const fieldMatch = FIELD_LINE.exec(line);
+    if (!fieldMatch) continue;
+    const key = fieldMatch[1]!.toLowerCase() as ExecRequestField;
+    if (fields[key] === undefined) fields[key] = fieldMatch[2]!.trim();
+  }
+  return {
+    patch: [PATCH_BEGIN, ...lines.slice(begin + 1, end), PATCH_END].join("\n"),
+    cwd: fields.cwd,
+    reason: fields.reason,
+  };
+}
+
+/** Every file path a patch adds, updates, deletes or moves to, in order of appearance. */
+export function patchTargetPaths(patch: string): string[] {
+  return patch.split(/\r\n|\n|\r/).flatMap(line => {
+    const target = PATCH_TARGET_LINE.exec(line)?.[1];
+    return target === undefined ? [] : [target];
+  });
+}
+
 export function formatExecResult(exitCode: number, output: string): string {
   return `[EXEC_RESULT]\nexit_code: ${exitCode}\noutput:\n${output}\n[/EXEC_RESULT]`;
 }
@@ -57,6 +105,14 @@ export function formatCwdOutsideWorkspace(requestedCwd: string, workspaceCwd: st
   return [
     `Execution blocked before approval: cwd "${requestedCwd}" resolves outside the workspace root "${workspaceCwd}".`,
     "The operator did not reject this request. Retry with a cwd relative to the workspace root (for example `.` or `doc`), not an absolute path.",
+  ].join("\n");
+}
+
+/** Returned instead of asking the operator when a patch touches a path outside the workspace. */
+export function formatPatchOutsideWorkspace(path: string, workspaceCwd: string): string {
+  return [
+    `Patch blocked before approval: "${path}" resolves outside the workspace root "${workspaceCwd}".`,
+    "The operator did not reject this patch. Retry with file paths inside the workspace, relative to the cwd field.",
   ].join("\n");
 }
 
@@ -118,4 +174,23 @@ export const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS = [
   "Never add --dangerously-bypass-approvals-and-sandbox to this command.",
   "Then read the result with a second EXEC_REQUEST block running: cat /tmp/subagent-report.txt",
   "Use -s workspace-write only if the sub-task must edit files itself.",
+  "",
+  "To create, edit, move or delete files, do not run apply_patch through an EXEC_REQUEST: it is not a shell command in this transport.",
+  "Output an APPLY_PATCH block instead and halt generation immediately. Put the patch in a code fence,",
+  "exactly as below, with the standard envelope (each file starts with *** Add File:, *** Update File: or *** Delete File:):",
+  "[APPLY_PATCH]",
+  "cwd: <target working directory, defaults to .>",
+  "reason: <rationale for this change>",
+  "```",
+  "*** Begin Patch",
+  "*** Update File: <path relative to cwd>",
+  "@@",
+  " <unchanged context line>",
+  "-<line to remove>",
+  "+<line to add>",
+  "*** End Patch",
+  "```",
+  "[/APPLY_PATCH]",
+  "File paths must stay inside the workspace. The reply is an [EXEC_RESULT] block with the apply_patch output;",
+  "do not fabricate it, and read the file again if you need to confirm the change.",
 ].join("\n");

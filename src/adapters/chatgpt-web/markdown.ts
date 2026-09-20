@@ -84,6 +84,25 @@ function restoreHitlProtocolBlocks(markdown: string): string {
   );
 }
 
+/** Turndown escapes the markers of an APPLY_PATCH block like any literal text. The patch itself sits
+ * in a code fence, which Turndown leaves verbatim, so only the text outside fences is unescaped. */
+function restoreHitlPatchBlocks(markdown: string): string {
+  const unescape = (text: string) => text.replace(/\\([\\*`[\]>_])/g, "$1");
+  return markdown.replace(
+    /\\\[APPLY\\_PATCH\\\]([\s\S]*?)\\\[\/APPLY\\_PATCH\\\]/g,
+    (_match, inner: string) => {
+      const fence = /(?:^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*(?=\n|$)/g;
+      let restored = "";
+      let last = 0;
+      for (let match = fence.exec(inner); match; match = fence.exec(inner)) {
+        restored += unescape(inner.slice(last, match.index)) + match[0];
+        last = match.index + match[0].length;
+      }
+      return `[APPLY_PATCH]${restored + unescape(inner.slice(last))}[/APPLY_PATCH]`;
+    },
+  );
+}
+
 function obsidianWikiLink(value: string): string | undefined {
   const separator = value.indexOf("|");
   const target = (separator >= 0 ? value.slice(0, separator) : value).trim();
@@ -145,7 +164,7 @@ function linkObsidianWikiLinks(markdown: string): string {
 export function chatGptHtmlToMarkdown(html: string): string {
   if (!html.trim()) return "";
   return linkObsidianWikiLinks(
-    preserveObsidianWikiLinks(restoreHitlProtocolBlocks(turndown.turndown(html))),
+    preserveObsidianWikiLinks(restoreHitlPatchBlocks(restoreHitlProtocolBlocks(turndown.turndown(html)))),
   ).trim();
 }
 
