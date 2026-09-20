@@ -122,6 +122,13 @@ codex-chatgpt-web setup --browser-only --acknowledge-unofficial
 codex-chatgpt-web serve --hitl
 ```
 
+`setup --browser-only`는 런처의 브라우저와 통신하므로 **먼저 런처를 열고 계속 실행해 두세요**.
+setup이 읽는 브라우저 호스트 디스크립터는 런처가 열려 있는 동안에만 만들어지며, 없으면 setup이
+`Launcher browser host is unavailable: descriptor is missing`로 실패합니다. Linux와 Windows에서는
+첫 setup을 런처의 **Setup** 페이지에서 진행하며(단독 터미널 실행은 거부됩니다), 이후 명령을 다시
+실행할 때도 런처가 열려 있어야 합니다. 설정이 아직 런처의 브라우저를 쓰지 않는 macOS에서만 터미널
+명령이 단독으로 동작합니다. 설치 스크립트도 같은 안내를 출력합니다.
+
 `--hitl`은 `--browser-only`를 필요로 합니다(Full harness 모드는 이미 MCP를 통해 실제 도구 호출을
 사용할 수 있습니다). 또한 포그라운드에서 TTY가 연결된 경우에만 활성화되며, 백그라운드 서비스로
 실행하는 등 다른 조건에서는 fail-closed(실행 없음) 상태가 됩니다.
@@ -138,8 +145,9 @@ codex-chatgpt-web serve --hitl --workspace D:\path\to\your\project
 요청한 모든 명령은 즉시 실행됩니다(여전히 워크스페이스 루트로 제한되며 터미널에 그대로
 표시됩니다). 파괴적인 명령도 예외가 아닙니다.
 
-Windows에서는 런처가 이를 대신 처리할 수 있습니다. **설정 → 로컬 실행(HITL)**에서 워크스페이스
-폴더를 선택하면 서버를 실행하는 터미널 창이 열립니다. 그 창을 닫으면 중지되며, **HITL 모드
+Windows, macOS, Linux에서는 런처가 이를 대신 처리할 수 있습니다. **설정 → 로컬 실행(HITL)**에서
+워크스페이스 폴더를 선택하면 서버를 실행하는 터미널 창이 열립니다(macOS는 Terminal.app, Linux는
+`PATH`에서 처음 발견되는 `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `mate-terminal`, `tilix`, `terminator`, `alacritty`, `kitty`, `xterm` 중 하나). 그 창을 닫으면 중지되며, **HITL 모드
 나가기**를 사용하면 포트를 런처의 백그라운드 런타임으로 돌려줍니다.
 
 모델에는 이 루트가 전달되고 상대적인 `cwd` 값을 사용하도록 지시됩니다. `cwd`가 루트 밖으로

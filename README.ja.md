@@ -123,6 +123,14 @@ codex-chatgpt-web setup --browser-only --acknowledge-unofficial
 codex-chatgpt-web serve --hitl
 ```
 
+`setup --browser-only` はランチャーのブラウザと通信するため、**先にランチャーを開き、起動したままにして
+ください**。setup が読み取るブラウザホストのディスクリプターは、ランチャーの起動中だけ書き出されます。
+ない場合、setup は `Launcher browser host is unavailable: descriptor is missing` で失敗します。
+Linux と Windows では最初の setup をランチャーの **Setup** ページから行います（素のターミナル実行は
+拒否されます）。その後にコマンドを再実行する場合もランチャーを開いておく必要があります。ターミナル
+だけで動作するのは、設定がまだランチャーのブラウザを使っていない macOS のみです。インストール
+スクリプトも同じヒントを表示します。
+
 `--hitl` には `--browser-only` が必須です（Full harness モードは MCP 経由で実際のツール呼び出しを
 すでに持っています）。また、フォアグラウンドかつ TTY がアタッチされている場合にのみ有効になり、
 バックグラウンドサービスとして実行する場合など、それ以外の状況では fail-closed（実行なし）になります。
@@ -139,9 +147,10 @@ codex-chatgpt-web serve --hitl --workspace D:\path\to\your\project
 モデルが要求したコマンドはすぐに実行されます（ワークスペースルートに限定され、ターミナルにも
 表示されます）。破壊的なコマンドも例外ではありません。
 
-Windows では、ランチャーがこれを代行できます。**設定 → ローカル実行（HITL）** でワークスペース
-フォルダーを選ぶと、サーバーを実行するターミナルウィンドウが開きます。そのウィンドウを閉じると
-停止し、**HITL モードを終了**するとポートがランチャーのバックグラウンドランタイムに戻ります。
+Windows・macOS・Linux では、ランチャーがこれを代行できます。**設定 → ローカル実行（HITL）** で
+ワークスペースフォルダーを選ぶと、サーバーを実行するターミナルウィンドウが開きます（macOS では
+Terminal.app、Linux では `PATH` 上で最初に見つかった `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `mate-terminal`, `tilix`, `terminator`, `alacritty`, `kitty`, `xterm` のいずれか）。
+そのウィンドウを閉じると停止し、**HITL モードを終了**するとポートがランチャーのバックグラウンドランタイムに戻ります。
 
 モデルにはこのルートが伝えられ、相対的な `cwd` 値を使うよう指示されます。`cwd` の解決先がルート外
 になるリクエストは確認なしでブロックされ、`[hitl] blocked EXEC_REQUEST ...` としてログに記録

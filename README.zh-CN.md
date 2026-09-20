@@ -121,6 +121,12 @@ codex-chatgpt-web setup --browser-only --acknowledge-unofficial
 codex-chatgpt-web serve --hitl
 ```
 
+`setup --browser-only` 需要与启动器的浏览器通信，因此**请先打开启动器并保持运行**——setup 读取的
+浏览器主机描述文件只在启动器运行期间存在，缺失时 setup 会报错
+`Launcher browser host is unavailable: descriptor is missing`。在 Linux 和 Windows 上，首次 setup
+需在启动器的 **Setup** 页面完成（单独在终端运行会被拒绝）；之后重新运行该命令也需要保持启动器打开。
+只有在 macOS 上且配置尚未使用启动器的浏览器时，终端命令才能独立运行。安装脚本也会打印同样的提示。
+
 `--hitl` 需要同时使用 `--browser-only`（Full harness 模式已经可以通过 MCP 进行真正的工具调用），
 且只有在前台运行并连接了 TTY 时才会激活——在其他任何情况下（例如作为后台服务运行）都会 fail-closed
 （不执行任何命令）。
@@ -135,8 +141,8 @@ codex-chatgpt-web serve --hitl --workspace D:\path\to\your\project
 如果你愿意承担风险，`--hitl-auto-approve` 会完全跳过逐条命令的提示：模型请求的每一条命令都会
 立即执行（仍限定在工作区根目录内，并会回显到终端），包括破坏性的命令。
 
-在 Windows 上，启动器可以帮你完成这件事：**设置 → 本地执行（HITL）** 让你选择工作区文件夹，
-并打开一个运行服务器的终端窗口。关闭该窗口即可停止服务器；使用**离开 HITL 模式**可将端口交还给
+在 Windows、macOS 和 Linux 上，启动器都可以帮你完成这件事：**设置 → 本地执行（HITL）** 让你选择工作区文件夹，
+并打开一个运行服务器的终端窗口（macOS 使用 Terminal.app；Linux 使用 `PATH` 中最先找到的 `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `mate-terminal`, `tilix`, `terminator`, `alacritty`, `kitty`, `xterm` 之一）。关闭该窗口即可停止服务器；使用**离开 HITL 模式**可将端口交还给
 启动器的后台运行时。
 
 模型会被告知这个根目录，并被要求使用相对的 `cwd` 值。任何 `cwd` 解析后落在此范围之外的请求都会

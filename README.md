@@ -81,7 +81,7 @@ covering both, and is uploaded only when `-Publish -Repository <owner/repo> -Tag
 
 After installing, the launcher's **Setup** page walks through the rest: 1. sign in to ChatGPT,
 2. run the browser smoke test, 3. **Add models** to Codex (quit every Codex window first; start
-Codex yourself if it does not open), and 4. on Windows browser-only mode, **Start the HITL
+Codex yourself if it does not open), and 4. in browser-only mode, **Start the HITL
 terminal** for a project folder, or copy the shown
 `codex-chatgpt-web serve --hitl --workspace <folder> --hitl-auto-approve` command into a terminal.
 
@@ -149,6 +149,14 @@ codex-chatgpt-web setup --browser-only --acknowledge-unofficial
 codex-chatgpt-web serve --hitl
 ```
 
+`setup --browser-only` talks to the launcher's browser, so **open the launcher first and keep it
+running** — the launcher writes the browser-host descriptor that setup reads only while it is open,
+and without it setup fails with `Launcher browser host is unavailable: descriptor is missing`. On
+Linux and Windows the first setup is done from the launcher's **Setup** page (a bare terminal run is
+refused there); re-running the command afterwards needs the launcher open. Only on macOS, when the
+config doesn't use the launcher's browser yet, does the terminal command work on its own. The install
+scripts print this same hint.
+
 `--hitl` requires `--browser-only` (full mode already has real tool calls through MCP) and only
 activates in the foreground with an attached TTY — it fails closed (no exec) under any other
 condition, such as running as a background service.
@@ -165,9 +173,12 @@ If you accept the risk, `--hitl-auto-approve` skips the per-command prompt entir
 the model requests runs immediately (still confined to the workspace root and echoed to the
 terminal), including destructive ones.
 
-On Windows the launcher can do this for you: **Settings → Local exec (HITL)** lets you pick the
-workspace folder and opens a terminal window running the server. Close that window to stop it, and
-use **Leave HITL mode** to hand the port back to the launcher's background runtime.
+On Windows, macOS, and Linux the launcher can do this for you: **Settings → Local exec (HITL)** lets
+you pick the workspace folder and opens a terminal window running the server (Terminal.app on macOS;
+on Linux the first emulator found on `PATH` among `x-terminal-emulator`, `gnome-terminal`, `konsole`,
+`xfce4-terminal`, `mate-terminal`, `tilix`, `terminator`, `alacritty`, `kitty`, and `xterm`). Close
+that window to stop it, and use **Leave HITL mode** to hand the port back to the launcher's
+background runtime.
 
 The model is told this root and asked for relative `cwd` values. A request whose `cwd` resolves
 outside it is blocked without prompting, logged as `[hitl] blocked EXEC_REQUEST ...`, and the model
