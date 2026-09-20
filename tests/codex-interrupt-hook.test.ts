@@ -187,3 +187,42 @@ test("keeps foreign TOML tables inserted between the managed hook and its trust 
     }
   }
 });
+
+test("keeps a trust state that Codex moved into an earlier [hooks.state] group", () => {
+  const configPath = "/Users/test/.codex/config.toml";
+  const original = [
+    'model = "example"',
+    "",
+    "[hooks.state]",
+    "",
+    '[hooks.state."/other/hooks.json:stop:0:0"]',
+    'trusted_hash = "sha256:other"',
+    "",
+    "[features]",
+    "goals = true",
+    "",
+  ].join("\n");
+  const installed = installCodexInterruptHook(original, configPath, { runtimeCommand: ["/opt/runtime"] });
+  const stateBlock = `[hooks.state.${JSON.stringify(installed.installed.stateKey)}]\n`
+    + `trusted_hash = ${JSON.stringify(installed.installed.trustedHash)}\n`;
+  // The native config writer groups every trust entry under the shared [hooks.state] table, which
+  // leaves the managed hook without the blank line that used to precede its own trust entry.
+  const edited = installed.text
+    .replace(`\n${stateBlock}`, "")
+    .replace('trusted_hash = "sha256:other"\n', `trusted_hash = "sha256:other"\n\n${stateBlock}`);
+  expect(edited).not.toBe(installed.text);
+  expect(Bun.TOML.parse(edited)).toEqual(Bun.TOML.parse(installed.text));
+
+  verifyCodexInterruptHook(edited, installed.installed);
+  const restored = restoreCodexInterruptHook(edited, installed.installed);
+  expect(Bun.TOML.parse(restored)).toEqual(Bun.TOML.parse(original));
+  verifyCodexInterruptHookRestored(restored);
+
+  for (const changed of [
+    edited.replace("timeout = 3", "timeout = 2"),
+    edited.replace(installed.installed.trustedHash, "sha256:changed"),
+    edited + `\n[hooks.state.${JSON.stringify(installed.installed.stateKey)}.extra]\nchanged = true\n`,
+  ]) {
+    expect(() => restoreCodexInterruptHook(changed, installed.installed)).toThrow("changed after setup");
+  }
+});

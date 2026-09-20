@@ -147,10 +147,17 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
     throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
   }
   const stateOffset = stateHeader.index + stateHeader[0].length - stateHeader[1].length;
-  // The native TOML writer can insert unrelated tables between the hook and its trust state.
-  // Locate the two owned definitions separately, retaining exact command/field matching.
-  const ranges = [ownedPrefix.slice(0, stateOffset), ownedPrefix.slice(stateOffset)].map(fragment => {
-    const pattern = new RegExp(hookTextPattern(fragment), "g");
+  // The native TOML writer can insert unrelated tables between the hook and its trust state, or
+  // regroup the trust state under an earlier shared [hooks.state] table (dropping the blank line
+  // that used to separate it from the hook). Locate the two owned definitions separately,
+  // retaining exact command/field matching; blank lines after the hook text are optional.
+  const ranges = [ownedPrefix.slice(0, stateOffset), ownedPrefix.slice(stateOffset)].map((fragment, index) => {
+    const lineBreaks = /(?:\r\n|\n|\r)*$/.exec(fragment)![0];
+    const body = index === 0 ? fragment.slice(0, fragment.length - lineBreaks.length) : fragment;
+    const optionalBreaks = index === 0 && lineBreaks
+      ? `(?:\\r\\n|\\n|\\r){0,${lineBreaks.split(/\r\n|\n|\r/).length - 1}}`
+      : "";
+    const pattern = new RegExp(hookTextPattern(body) + optionalBreaks, "g");
     const match = pattern.exec(text);
     if (!match || pattern.exec(text)) {
       throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
@@ -158,7 +165,7 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
     return { start: match.index, end: match.index + match[0].length };
   });
   const [hook, state] = ranges;
-  if (!hook || !state || state.start < hook.end) {
+  if (!hook || !state) {
     throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
   }
   if (interruptGroupCount(text.slice(0, hook.start)) !== installed.groupIndex) {
