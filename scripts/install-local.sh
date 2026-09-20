@@ -83,4 +83,14 @@ if [ "$#" -gt 0 ]; then
   "$TARGET_DIR/bin/codex-chatgpt-web" setup "$@"
   exit 0
 fi
-echo "Next: $BIN_DIR/codex-chatgpt-web setup --browser-only --acknowledge-unofficial"
+# Terminal-only "setup --browser-only" manages its own Chrome on macOS only (src/setup.ts); anywhere
+# else, or once the config uses the launcher's browser, setup needs the launcher open (it reads the
+# launcher's browser-host descriptor, which exists only while the app runs).
+if [ "$(uname -s)" = "Darwin" ]; then
+  echo "Next: $BIN_DIR/codex-chatgpt-web setup --browser-only --acknowledge-unofficial"
+  echo "(If this machine already uses the launcher's browser, open the launcher first.)"
+else
+  echo "Next: open the Codex Web GPT launcher and finish setup from its Setup page."
+  echo "To re-run setup from a terminal, keep the launcher open and run:"
+  echo "  $BIN_DIR/codex-chatgpt-web setup --browser-only --acknowledge-unofficial"
+fi
