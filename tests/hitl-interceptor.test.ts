@@ -222,3 +222,78 @@ test("HitlApprovalQueue keeps draining after one prompt fails", async () => {
   await expect(following).resolves.toEqual({ action: "run", command: "ok" });
   expect(calls).toBe(2);
 });
+
+// --- Inline-self-execution streak warning -----------------------------------------------------
+
+function collectingGateway(): { gateway: ApprovalGateway; seen: ExecProposal[] } {
+  const seen: ExecProposal[] = [];
+  return {
+    seen,
+    gateway: {
+      request: async proposal => {
+        seen.push(proposal);
+        return { action: "run", command: proposal.command };
+      },
+    },
+  };
+}
+
+test("HitlApprovalQueue leaves reason untouched below the streak threshold", async () => {
+  const { gateway, seen } = collectingGateway();
+  const queue = new HitlApprovalQueue(gateway);
+  for (let i = 0; i < 4; i++) {
+    await queue.forTurn("t1").request({ command: `cmd${i}`, cwd: "/w", reason: `do ${i}` });
+  }
+  expect(seen.map(p => p.reason)).toEqual(["do 0", "do 1", "do 2", "do 3"]);
+});
+
+test("HitlApprovalQueue prepends a warning once the non-delegated streak reaches 5, and repeats it", async () => {
+  const { gateway, seen } = collectingGateway();
+  const queue = new HitlApprovalQueue(gateway);
+  for (let i = 0; i < 7; i++) {
+    await queue.forTurn("t1").request({ command: `cmd${i}`, cwd: "/w", reason: `do ${i}` });
+  }
+  expect(seen[3]!.reason).toBe("do 3");
+  expect(seen[4]!.reason).toContain("5 actions in a row");
+  expect(seen[4]!.reason).toContain("do 4");
+  expect(seen[5]!.reason).toContain("6 actions in a row");
+  expect(seen[6]!.reason).toContain("7 actions in a row");
+});
+
+test("HitlApprovalQueue warns even without a reason given", async () => {
+  const { gateway, seen } = collectingGateway();
+  const queue = new HitlApprovalQueue(gateway);
+  for (let i = 0; i < 5; i++) {
+    await queue.forTurn("t1").request({ command: `cmd${i}`, cwd: "/w" });
+  }
+  expect(seen[4]!.reason).toContain("5 actions in a row");
+});
+
+test("HitlApprovalQueue counts apply_patch proposals toward the streak", async () => {
+  const { gateway, seen } = collectingGateway();
+  const queue = new HitlApprovalQueue(gateway);
+  for (let i = 0; i < 4; i++) {
+    await queue.forTurn("t1").request({ command: `patch${i}`, cwd: "/w", kind: "patch" });
+  }
+  await queue.forTurn("t1").request({ command: "cmd", cwd: "/w" });
+  expect(seen[4]!.reason).toContain("5 actions in a row");
+});
+
+test("HitlApprovalQueue resets the streak once a delegated `codex exec` sub-task is proposed", async () => {
+  const { gateway, seen } = collectingGateway();
+  const queue = new HitlApprovalQueue(gateway);
+  for (let i = 0; i < 4; i++) {
+    await queue.forTurn("t1").request({ command: `cmd${i}`, cwd: "/w" });
+  }
+  await queue.forTurn("t1").request({
+    command: "codex exec -C repo -s read-only --skip-git-repo-check -o /tmp/report.txt 'review it'",
+    cwd: "/w",
+  });
+  for (let i = 0; i < 4; i++) {
+    await queue.forTurn("t1").request({ command: `next${i}`, cwd: "/w" });
+  }
+  expect(seen.every(p => !p.reason || !p.reason.includes("actions in a row"))).toBe(true);
+
+  await queue.forTurn("t1").request({ command: "one-more", cwd: "/w" });
+  expect(seen[seen.length - 1]!.reason).toContain("5 actions in a row");
+});

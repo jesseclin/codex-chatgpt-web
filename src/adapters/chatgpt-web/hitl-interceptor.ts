@@ -60,6 +60,27 @@ export function createHitlExecGate(deps: HitlExecGateDeps): HitlExecGate {
   };
 }
 
+/** A plan executed one un-delegated action at a time, this many actions in a row, is
+ * indistinguishable from a model that was supposed to dispatch subagent/sub-task work but never
+ * did -- the exact pattern that ran a Codex plan unattended for 2h11m (see the session-log
+ * investigation this constant comes from). */
+const NON_DELEGATED_STREAK_WARNING_THRESHOLD = 5;
+
+/** Matches the one delegation convention the HITL transport documents (`DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS`
+ * in src/hitl/protocol.ts): an EXEC_REQUEST whose command shells out to a non-interactive `codex exec`
+ * sub-task. An APPLY_PATCH is never a delegation -- it always edits files inline. */
+const CODEX_EXEC_DELEGATION = /\bcodex\s+exec\b/;
+
+function isDelegatedSubTask(proposal: ExecProposal): boolean {
+  return proposal.kind !== "patch" && CODEX_EXEC_DELEGATION.test(proposal.command);
+}
+
+function nonDelegatedStreakWarning(streak: number): string {
+  return `${streak} actions in a row with no delegated \`codex exec\` sub-task -- this looks like `
+    + "inline self-execution of a larger plan rather than subagent-driven work. Approve to continue, "
+    + "or reject/adjust now -- this is also a good point to switch model.";
+}
+
 /**
  * Serializes every HITL approval prompt for one adapter onto the daemon's single stdin.
  *
@@ -72,6 +93,9 @@ export function createHitlExecGate(deps: HitlExecGateDeps): HitlExecGate {
  */
 export class HitlApprovalQueue {
   private tail: Promise<unknown> = Promise.resolve();
+  /** Consecutive proposals (across every turn this queue has ever seen -- this instance lives for
+   * the whole daemon session) that were not a delegated `codex exec` sub-task. Reset by one. */
+  private nonDelegatedStreak = 0;
 
   constructor(private readonly gateway: ApprovalGateway) {}
 
@@ -80,11 +104,25 @@ export class HitlApprovalQueue {
     return { request: (proposal, signal) => this.enqueue({ ...proposal, traceId }, signal) };
   }
 
+  /** Reasons come from the model and are shown to the operator verbatim, so a streak warning is
+   * prepended (not appended) to stay visible even if the terminal/popup truncates a long reason. */
+  private annotateStreak(proposal: ExecProposal): ExecProposal {
+    if (isDelegatedSubTask(proposal)) {
+      this.nonDelegatedStreak = 0;
+      return proposal;
+    }
+    this.nonDelegatedStreak += 1;
+    if (this.nonDelegatedStreak < NON_DELEGATED_STREAK_WARNING_THRESHOLD) return proposal;
+    const warning = nonDelegatedStreakWarning(this.nonDelegatedStreak);
+    return { ...proposal, reason: proposal.reason ? `${warning}\n\n${proposal.reason}` : warning };
+  }
+
   private enqueue(proposal: ExecProposal, signal?: AbortSignal): Promise<ApprovalDecision> {
+    const annotated = this.annotateStreak(proposal);
     // Chain off settlement (not success) so one failed prompt cannot wedge the queue forever.
     const decision = this.tail.then(
-      () => this.gateway.request(proposal, signal),
-      () => this.gateway.request(proposal, signal),
+      () => this.gateway.request(annotated, signal),
+      () => this.gateway.request(annotated, signal),
     );
     this.tail = decision.then(() => undefined, () => undefined);
     return decision;
