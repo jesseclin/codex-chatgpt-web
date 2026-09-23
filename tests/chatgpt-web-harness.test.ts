@@ -18,7 +18,7 @@ import {
   CODEX_ACTIVE_COMPACTION_REQUEST_MARKER,
 } from "../src/adapters/chatgpt-web/native-compaction-control";
 import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt, withoutSupersededModelSwitchContracts } from "../src/adapters/chatgpt-web/prompt";
-import { MAX_CHATGPT_WEB_TURN_RETRIES } from "../src/adapters/chatgpt-web/retry-policy";
+import { chatGptWebTurnRetryPolicy, MAX_CHATGPT_WEB_TURN_RETRIES } from "../src/adapters/chatgpt-web/retry-policy";
 import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnSessions, chatGptCompactionSourceExecutionKey, chatGptInstructionLineage, chatGptThreadOwnershipKey, chatGptTurnExecutionKey, chatGptTurnSessions } from "../src/adapters/chatgpt-web/turn-execution";
 import { callTurnBroker, TurnBroker, type BrokerToolResult } from "../src/adapters/chatgpt-web/turn-broker";
 import { ChatGptExternalTurnProgress, ChatGptMirroredTurnProgress, chatGptExternalProgressIsLive, chatGptExternalToolCallsAreInFlight } from "../src/adapters/chatgpt-web/turn-progress";
@@ -32,6 +32,11 @@ import type { AdapterEvent, CodexParsedRequest, CodexProviderConfig, CodexTool }
 const tempRoot = join(tmpdir(), `codex-chatgpt-web-harness-${process.pid}-${Date.now()}`);
 mkdirSync(tempRoot, { recursive: true });
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+
+// This file exercises the shared chatGptWebTurnRetryPolicy singleton through the adapter's real
+// runTurn path; its bounded backoff (see retry-policy.ts) is covered on its own in
+// tests/retry-policy.test.ts, so skip the real delay here to keep these tests fast.
+chatGptWebTurnRetryPolicy.setSleepForTesting(() => Promise.resolve());
 
 test("current-turn MCP progress tracks active calls without claiming completion", async () => {
   const progress = new ChatGptExternalTurnProgress();
@@ -1265,6 +1270,45 @@ describe("ChatGPT outer-native harness v4", () => {
         if (attempt === MAX_CHATGPT_WEB_TURN_RETRIES) {
           expect((error as Extract<AdapterEvent, { type: "error" }>).message)
             .toContain("Try again in a few minutes.");
+        }
+      }
+      expect(browserStarts).toBe(MAX_CHATGPT_WEB_TURN_RETRIES + 1);
+    } finally {
+      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+      await TurnBroker.forSocket(socketPath).close();
+    }
+  });
+
+  test("caps automatic retries at three when ChatGPT stops responding after accepting the prompt", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-h4-stream-disconnect-${process.pid}-${Date.now()}`);
+    const provider: CodexProviderConfig = {
+      adapter: "chatgpt-web",
+      baseUrl: `browser://chatgpt-stream-disconnect-${Date.now()}`,
+      chatgptWeb: { brokerSocketPath: socketPath, localToolsEnabled: false, solAvailable: true, extraHighAvailable: true, proAvailable: true },
+    };
+    const worker = ChatGptBrowserWorker.forProvider(provider);
+    const originalRun = worker.run.bind(worker);
+    let browserStarts = 0;
+    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
+      browserStarts += 1;
+      turn.onSubmitted?.();
+      throw new Error("stream disconnected before completion");
+    };
+    try {
+      for (let attempt = 0; attempt < MAX_CHATGPT_WEB_TURN_RETRIES + 2; attempt += 1) {
+        const events: AdapterEvent[] = [];
+        await createChatGptWebAdapter(provider).runTurn!(
+          rawWireRequest(environmentXml),
+          { headers: new Headers() },
+          event => events.push(event),
+        );
+        const error = events.at(-1);
+        expect(error).toMatchObject({ type: "error", code: "chatgpt_submitted_turn_failed" });
+        expect((error as Extract<AdapterEvent, { type: "error" }>).retryable)
+          .toBe(attempt < MAX_CHATGPT_WEB_TURN_RETRIES);
+        if (attempt === MAX_CHATGPT_WEB_TURN_RETRIES) {
+          expect((error as Extract<AdapterEvent, { type: "error" }>).message)
+            .toContain("ChatGPT remained unavailable after several attempts.");
         }
       }
       expect(browserStarts).toBe(MAX_CHATGPT_WEB_TURN_RETRIES + 1);
@@ -3486,6 +3530,7 @@ describe("ChatGPT outer-native harness v4", () => {
       expect(events.at(-1)).toMatchObject({
         type: "error",
         code: "chatgpt_submitted_turn_failed",
+        retryable: true,
       });
     } finally {
       (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;

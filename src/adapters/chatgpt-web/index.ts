@@ -311,7 +311,10 @@ function submittedTurnFailure(session: ChatGptTurnSession, error: unknown): Erro
       status: 502,
       errorType: "server_error",
       code: ambiguous ? "chatgpt_submission_ambiguous" : "chatgpt_submitted_turn_failed",
-      retryable: false,
+      // Ambiguous (did Send even register?) stays non-retryable: retrying could double-send.
+      // Once the prompt was accepted, ChatGPT going silent is the stream-disconnect case a
+      // bounded, backed-off retry can recover from instead of forcing a manual retry.
+      retryable: !ambiguous,
       cause: normalized,
     },
   );
@@ -1475,7 +1478,7 @@ export function createChatGptWebAdapter(
           }
           const turnError = submittedTurnFailure(session, error);
           const handledError = turnError instanceof ChatGptWebAdapterError && turnError.retryable
-            ? chatGptWebTurnRetryPolicy.recordRetryableFailure(retryKey, turnError)
+            ? await chatGptWebTurnRetryPolicy.recordRetryableFailure(retryKey, turnError)
             : turnError;
           if (!(turnError instanceof ChatGptWebAdapterError && turnError.retryable)) {
             chatGptWebTurnRetryPolicy.clear(retryKey);

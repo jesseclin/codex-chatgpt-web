@@ -4,6 +4,18 @@ import { ChatGptWebAdapterError } from "./adapter-error";
 export const MAX_CHATGPT_WEB_TURN_RETRIES = 3;
 const RETRY_BUDGET_TTL_MS = 30 * 60_000;
 
+/** Bounded exponential backoff: doubles per retry, capped so a stuck browser can't be hammered. */
+export const RETRY_BACKOFF_BASE_MS = 2_000;
+export const RETRY_BACKOFF_MAX_MS = 16_000;
+
+export function computeRetryBackoffMs(retries: number): number {
+  return Math.min(RETRY_BACKOFF_MAX_MS, RETRY_BACKOFF_BASE_MS * 2 ** Math.max(0, retries - 1));
+}
+
+export type RetryBackoffSleep = (ms: number) => Promise<void>;
+
+const defaultSleep: RetryBackoffSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 interface RetryBudgetEntry {
   retries: number;
   updatedAt: number;
@@ -34,9 +46,16 @@ function exhaustedError(entry: RetryBudgetEntry): ChatGptWebAdapterError {
 export class ChatGptWebTurnRetryPolicy {
   private readonly entries = new Map<string, RetryBudgetEntry>();
 
-  constructor(private readonly ttlMs = RETRY_BUDGET_TTL_MS) {}
+  constructor(
+    private readonly ttlMs = RETRY_BUDGET_TTL_MS,
+    private sleep: RetryBackoffSleep = defaultSleep,
+  ) {}
 
-  recordRetryableFailure(key: string, error: ChatGptWebAdapterError, now = Date.now()): ChatGptWebAdapterError {
+  async recordRetryableFailure(
+    key: string,
+    error: ChatGptWebAdapterError,
+    now = Date.now(),
+  ): Promise<ChatGptWebAdapterError> {
     this.prune(now);
     const previous = this.entries.get(key);
     const entry: RetryBudgetEntry = {
@@ -50,7 +69,16 @@ export class ChatGptWebTurnRetryPolicy {
       },
     };
     this.entries.set(key, entry);
-    return entry.retries > MAX_CHATGPT_WEB_TURN_RETRIES ? exhaustedError(entry) : error;
+    if (entry.retries > MAX_CHATGPT_WEB_TURN_RETRIES) return exhaustedError(entry);
+    // Bounded backoff before handing the retryable failure back: throttles how fast a client
+    // that retries immediately on `retryable: true` can hammer a browser turn that just stalled.
+    await this.sleep(computeRetryBackoffMs(entry.retries));
+    return error;
+  }
+
+  /** Test-only seam: skip real delays without touching the retry budget itself. */
+  setSleepForTesting(sleep: RetryBackoffSleep): void {
+    this.sleep = sleep;
   }
 
   exhaustedError(key: string, now = Date.now()): ChatGptWebAdapterError | undefined {
