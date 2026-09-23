@@ -23,7 +23,7 @@ type WorkerStubSurface = {
     maintenancePage?: Page,
     reuseConversation?: boolean,
   ) => Promise<string>;
-  prepareTemporaryChatSurface: (...args: unknown[]) => Promise<void>;
+  prepareChatSurface: (...args: unknown[]) => Promise<void>;
   selectModelAndEffort: (...args: unknown[]) => Promise<unknown>;
   captureSubmissionBaseline: (...args: unknown[]) => Promise<unknown>;
   attachPromptWithIntegrityRetry: (...args: unknown[]) => Promise<void>;
@@ -125,7 +125,7 @@ function buildHarness(options: {
   let sendCalls = 0;
   let responseTurnCalls = 0;
 
-  worker.prepareTemporaryChatSurface = async () => {};
+  worker.prepareChatSurface = async () => {};
   worker.selectModelAndEffort = async () => ({
     modelId: CHATGPT_WEB_MODEL_ID,
     effort: "high",
