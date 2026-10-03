@@ -15,6 +15,7 @@ export interface LauncherState {
   autoStart: boolean;
   keepRunningOnClose: boolean;
   showBrowserDuringTurns: boolean;
+  autoApproveToolCalls: boolean;
   browserInteractionMode: BrowserInteractionMode;
   experimentalBiggerContext: boolean;
   experimentalSkillAttachments: boolean;
@@ -77,6 +78,14 @@ export interface BrowserTabState {
   active: boolean;
   closable: boolean;
   interactionMode?: BrowserInteractionMode;
+  approvalPending?: boolean;
+  authenticationRequired?: boolean;
+  activity?: {
+    state: "preparing" | "sending" | "chatgpt" | "tools" | "approval" | "unknown";
+    since: number;
+    updatedAt: number;
+    activeToolCalls: number;
+  };
   manualState?: "awaiting-user" | "sent" | "running" | "completed" | "timed-out" | "cancelled" | "failed";
   manualDeadlineAt?: string;
   canCopyPrompt?: boolean;
@@ -194,6 +203,7 @@ export interface LauncherApi {
   disableHitl(): Promise<HitlStatus>;
   copyText(text: string): Promise<boolean>;
   setSkillAttachments(enabled: boolean): Promise<LauncherState>;
+  setAutoApproveToolCalls(enabled: boolean): Promise<LauncherState>;
   setFreshConversationPerTurn(enabled: boolean): Promise<LauncherState>;
   setUseSavedChats(enabled: boolean): Promise<LauncherState>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
