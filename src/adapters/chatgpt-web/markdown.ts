@@ -103,12 +103,6 @@ function inlineFilePath(node: Node): string | undefined {
   return path;
 }
 
-function preserveObsidianWikiLinks(markdown: string): string {
-  // Turndown escapes literal brackets, but Codex interprets the resulting `\[` as LaTeX.
-  // Restore the source syntax before converting it into a regular Markdown file link.
-  return markdown.replace(/\\\[\\\[([^\r\n]*?)\\\]\\\]/g, "[[$1]]");
-}
-
 function restoreHitlProtocolBlocks(markdown: string): string {
   // The model emits [EXEC_REQUEST]/[EXEC_RESULT] blocks as plain text, but Turndown escapes
   // the brackets and underscores like any other literal text (e.g. `\[EXEC\_REQUEST\]`), which
@@ -220,7 +214,7 @@ function linkObsidianWikiLinks(markdown: string): string {
 export function chatGptHtmlToMarkdown(html: string): string {
   if (!html.trim()) return "";
   return linkObsidianWikiLinks(
-    preserveObsidianWikiLinks(restoreHitlPatchBlocks(restoreHitlProtocolBlocks(turndown.turndown(preserveKatexSource(html))))),
+    restoreHitlPatchBlocks(restoreHitlProtocolBlocks(turndown.turndown(preserveKatexSource(html)))),
   ).trim();
 }
 
