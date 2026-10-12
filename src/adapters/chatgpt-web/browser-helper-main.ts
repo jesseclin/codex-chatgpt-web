@@ -317,6 +317,7 @@ async function run(message: RunMessage): Promise<void> {
       } satisfies HitlExecGate,
     } : {}),
     onHeartbeat: () => writeProtocol({ type: "event", id: message.id, event: "heartbeat" }),
+    onGenerationProgress: () => writeProtocol({ type: "event", id: message.id, event: "generation_progress" }),
     onPreparedSelected: reused => {
       if (!writeProtocol({ type: "event", id: message.id, event: "prepared_selected", reused })) {
         throw new Error("Browser helper could not request prompt selection");
