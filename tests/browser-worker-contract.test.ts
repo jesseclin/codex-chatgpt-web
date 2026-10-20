@@ -2065,7 +2065,7 @@ for (const captureScreenshots of [false, true]) test(`connector failure persists
   }
 });
 
-test("successful connector verification clears the proven selection before releasing the page", async () => {
+for (const useSavedChats of [false, true]) test(`connector verification prepares the selected chat mode (${useSavedChats}) and clears its selection`, async () => {
   const diagnosticsRoot = mkdtempSync(join(tmpdir(), "cgw-connector-verification-success-"));
   const calls: string[] = [];
   const page = {
@@ -2081,9 +2081,10 @@ test("successful connector verification clears the proven selection before relea
 
   try {
     const result = await verifyConnectorExclusive.call({
-      config: { appName: "Codex Native2 DEV", browserDiagnosticsPath: diagnosticsRoot },
+      config: { appName: "Codex Native2 DEV", browserDiagnosticsPath: diagnosticsRoot, useSavedChats },
       ensurePage: async () => page,
-      prepareChatSurface: async (_page: unknown, capture: (checkpoint: string) => Promise<void>) => {
+      prepareChatSurface: async (_page: unknown, capture: (checkpoint: string) => Promise<void>, saved: boolean) => {
+        expect(saved).toBe(useSavedChats);
         calls.push("prepare");
         await capture("composer-ready");
       },
@@ -2670,6 +2671,7 @@ test("image attachment readiness uses exact file tiles and not localized remove-
     },
     locator: (selector: string) => {
       if (selector.startsWith(".composer-attachment-surface")) return {};
+      if (selector === 'input[data-testid="upload-photos-input"], input[type="file"][multiple]:not([accept])') return input;
       expect(selector).toBe(CHATGPT_SEND_BUTTON_SELECTOR);
       return send;
     },
@@ -2701,7 +2703,6 @@ test("image attachment readiness uses exact file tiles and not localized remove-
         : method === "Network.streamResourceContent" ? { bufferedData: Buffer.from(JSON.stringify({ event: "file.processing.completed" }) + "\n").toString("base64") } : {},
     }) }),
     locator: (selector: string) => {
-      if (selector === 'input[data-testid="upload-photos-input"], form[data-chatgpt-composer] input[type="file"][multiple]:not([accept])') return input;
       if (selector === '[role="alert"]') {
         return { allInnerTexts: async () => [] };
       }
@@ -3472,7 +3473,7 @@ test("effort menu waiting stops when ChatGPT reports an expired session", async 
 
 test("terminal model errors are scoped to the new assistant turn instead of global page alerts", () => {
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
-  expect(workerSource).toContain("throwIfChatGptTerminalErrorAlert(responseTurn.locator)");
+  expect(workerSource).toContain("throwIfChatGptTerminalErrorAlert(page.locator(chatGptTurnContainerSelector(responseTurn.identity)))");
   expect(workerSource).not.toContain("throwIfChatGptTerminalErrorAlert(page)");
 });
 
@@ -3577,6 +3578,7 @@ function toolConfirmationPage(options: {
     : '[role="dialog"]';
   const hiddenDialog = {
     filter: () => hiddenDialog,
+    last: () => hiddenDialog,
     count: async () => 0,
     isVisible: async () => false,
   };
@@ -4587,9 +4589,10 @@ test("the daemon prefers the browser helper that shipped beside its own entrypoi
 
 
 test("multipart observation surfaces Stopped thinking on its first observation even with live MCP work", async () => {
-  const absent = { last() { return this; }, filter() { return this; }, isVisible: async () => false };
+  const absent = { last() { return this; }, filter() { return this; }, isVisible: async () => false,
+    getByText() { return this; }, getByTestId() { return this; } };
   const page = { isClosed: () => false, locator: () => absent };
-  const binding = { locator: { getByText: () => absent, getByTestId: () => absent } };
+  const binding = { identity: "group:assistant:current", locator: absent };
   const snapshot = { responsePresent: true, stoppedThinkingVisible: true, visibleText: "", completionActionVisible: false };
   let observations = 0;
   let acknowledged = false;
