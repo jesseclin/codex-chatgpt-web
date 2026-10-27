@@ -505,6 +505,7 @@ export function createChatGptWebAdapter(
         : undefined;
       return {
         appName: worker.appName,
+        includeContextTokenBreakdown: true,
         captureLunaCheckpoint,
         // Without this the model is never told the [EXEC_REQUEST] protocol exists, so the gate
         // below could never fire in a real session.

@@ -377,9 +377,7 @@ function LauncherShell({
   snapshot: LauncherSnapshot;
   updateState: (state: LauncherState) => void;
 }) {
-  const interactionSetupComplete = snapshot.state.coreSetupComplete === true
-    && (snapshot.state.browserInteractionMode === "manual"
-      || snapshot.state.codexCatalogVerified === true);
+  const interactionSetupComplete = snapshot.state.coreSetupComplete === true;
   const firstRunZeroRiskSetup = snapshot.state.browserInteractionMode === "manual"
     && snapshot.state.coreSetupComplete !== true;
   const [surface, setSurface] = useState<Surface>(
@@ -408,7 +406,7 @@ function LauncherShell({
     && browser?.authenticated !== true;
   const needsSetup = !needsBrowser && !interactionSetupComplete;
   const mcpOptional = snapshot.state.browserInteractionMode === "automatic"
-    && snapshot.state.codexCatalogVerified === true
+    && snapshot.state.coreSetupComplete === true
     && snapshot.state.mcpSetupComplete !== true;
   const updateVisible = ["available", "downloading", "installing"].includes(snapshot.update.status);
   const updateBusy = snapshot.update.status === "downloading" || snapshot.update.status === "installing";
@@ -1423,7 +1421,7 @@ function SetupSurface({
       <SectionHeading label="MCP" meta={manualInteraction ? copy.required : copy.optional} spaced />
       <button
         className="next-surface-row"
-        disabled={!manualInteraction && !snapshot.state.codexCatalogVerified}
+        disabled={!manualInteraction && !snapshot.state.coreSetupComplete}
         onClick={showMcp}
         type="button"
       >
@@ -1552,8 +1550,8 @@ function McpSurface({
       subtitle={devProfile ? copy.devMcpSubtitle : copy.mcpSubtitle}
       title={devProfile ? copy.devMcpTitle : "MCP"}
     >
-      {!manualInteraction && !configuringInactiveMode && !snapshot.state.codexCatalogVerified ? (
-        <NoticeRow icon="setup" tone="warning">{copy.mcpCatalogRequired}</NoticeRow>
+      {!manualInteraction && !configuringInactiveMode && !snapshot.state.coreSetupComplete ? (
+        <NoticeRow icon="setup" tone="warning">{copy.mcpSetupRequired}</NoticeRow>
       ) : null}
 
       <div className="wizard-stepper" aria-label={`${step + 1} / 3`}>
@@ -1667,9 +1665,9 @@ function McpSurface({
             ) : null}
             {step === 1 ? (
               <p className="mcp-step-two-hint">
-                {manualInteraction || configuringInactiveMode || snapshot.state.codexCatalogVerified
+                {manualInteraction || configuringInactiveMode || snapshot.state.coreSetupComplete
                   ? copy.mcpStepTwoHint
-                  : copy.mcpCatalogRequired}
+                  : copy.mcpSetupRequired}
               </p>
             ) : null}
             {step === 2 ? (
@@ -1714,7 +1712,7 @@ function McpSurface({
           <PrimaryButton
             disabled={
               busy
-              || (!manualInteraction && !configuringInactiveMode && !snapshot.state.codexCatalogVerified)
+              || (!manualInteraction && !configuringInactiveMode && !snapshot.state.coreSetupComplete)
               || ((!credentialsConfigured || replacingCredentials) && (!tunnelId || !runtimeKey))
             }
             onClick={() => void install()}
@@ -1961,17 +1959,6 @@ function SettingsSurface({
       setBusy(false);
     }
   };
-  const setUseSavedChats = async (enabled: boolean) => {
-    setBusy(true);
-    setError(null);
-    try {
-      updateState(await api!.setUseSavedChats(enabled));
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
   const setInteractionMode = async (mode: BrowserInteractionMode) => {
     setBusy(true);
     setError(null);
@@ -2105,13 +2092,6 @@ function SettingsSurface({
             checked={snapshot.state.browserInteractionMode !== "manual" && snapshot.state.autoApproveToolCalls}
             disabled={busy || snapshot.state.browserInteractionMode === "manual" || !snapshot.state.coreSetupComplete}
             onChange={(checked) => void setAutoApproveToolCalls(checked)}
-          />
-        </SettingRow>
-        <SettingRow body={copy.savedChatsBody} label={copy.savedChats}>
-          <Switch
-            checked={snapshot.state.useSavedChats}
-            disabled={busy || snapshot.state.coreSetupComplete !== true}
-            onChange={(checked) => void setUseSavedChats(checked)}
           />
         </SettingRow>
         <SettingRow body={copy.chooseLanguageHint} label={copy.language}>
@@ -2710,9 +2690,7 @@ function DoctorSummary({ copy, language, report }: { copy: Copy; language: Langu
         {visibleChecks.map((check) => (
           <p key={check.id}>
             <StateDot state={check.status === "ok" ? "ready" : check.status === "warning" ? "busy" : "error"} />
-            <span>{check.status === "ok"
-              ? localizeRuntimeMessage(copy, check.message, check.id, language)
-              : check.message}</span>
+            <span>{localizeRuntimeMessage(copy, check.message, check.id, language)}</span>
           </p>
         ))}
       </div>
@@ -3070,8 +3048,8 @@ function FatalMessage({ message }: { message: string }) {
 
 function browserTabTitleFromTitle(value: string | undefined, copy: Copy): string {
   const title = value?.trim();
-  if (!title || title === "about:blank" || title.includes("codex-web-gpt-browser-host")) return copy.temporaryChat;
-  return title.replace(/\s*[|–-]\s*ChatGPT\s*$/i, "") || copy.temporaryChat;
+  if (!title || title === "about:blank" || title.includes("codex-web-gpt-browser-host")) return copy.newChat;
+  return title.replace(/\s*[|–-]\s*ChatGPT\s*$/i, "") || copy.newChat;
 }
 
 function browserTabTone(status: BrowserState["tabs"][number]["status"]): "idle" | "ready" | "busy" | "error" {
@@ -3085,9 +3063,6 @@ function formatBrowserAddress(url: string | undefined, copy: Copy): string {
   if (!url || url.startsWith("about:blank")) return copy.browserAddress;
   try {
     const parsed = new URL(url);
-    if (parsed.hostname === "chatgpt.com" && parsed.searchParams.get("temporary-chat") === "true") {
-      return `chatgpt.com  /  ${copy.temporaryChat}`;
-    }
     return `${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`;
   } catch {
     return copy.browserAddress;
